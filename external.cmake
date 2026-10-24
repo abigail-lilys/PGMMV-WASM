@@ -35,14 +35,14 @@ target_compile_options(ext_unzip PRIVATE "SHELL:-include platform/CCPlatformConf
 # against cocos's own headers (they differ from upstream only by CP_PRIVATE and a cpHastySpace.h include).
 set(PGMMV_CHIPMUNK_SRC "$ENV{HOME}/ext-src/Chipmunk2D" CACHE PATH "Chipmunk2D checkout (tag Chipmunk-7.0.3)")
 file(GLOB _cp_src "${PGMMV_CHIPMUNK_SRC}/src/*.c")
-# cpHastySpace.c needs <sys/sysctl.h> (absent in Emscripten); the multithreaded space
-# is excluded for now - revisit only if the link stage asks for cpHastySpace*.
-list(FILTER _cp_src EXCLUDE REGEX "cpHastySpace[.]c$")
 list(LENGTH _cp_src _cp_n)
 message(STATUS "pgmmv: chipmunk ${_cp_n} sources")
 add_library(ext_chipmunk STATIC ${_cp_src})
 set_target_properties(ext_chipmunk PROPERTIES C_STANDARD 99)
 target_include_directories(ext_chipmunk PUBLIC ${EXT_DIR}/chipmunk/include)
+# cpHastySpace.c: <sys/sysctl.h> is absent in Emscripten and only used under __APPLE__ -> empty shim.
+# (non-Apple: cpHastySpaceSetThreads(...,0) means 1 thread, so no worker threads are created)
+target_include_directories(ext_chipmunk BEFORE PRIVATE ${CMAKE_CURRENT_LIST_DIR}/shim)
 target_compile_options(ext_chipmunk PRIVATE -pthread)
 if(PGMMV_QUIET)
     target_compile_options(ext_chipmunk PRIVATE -w)

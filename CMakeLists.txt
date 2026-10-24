@@ -96,3 +96,53 @@ include(${CMAKE_CURRENT_LIST_DIR}/external.cmake)
 target_compile_options(cocos2d PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include list>")
 # Controller group is disabled on Emscripten for now (Controller is an incomplete type).
 set_source_files_properties("${COCOS_DIR}/base/CCEventListenerController.cpp" PROPERTIES HEADER_FILE_ONLY TRUE)
+
+# --- round-3: GLView (the desktop GLFW implementation on top of Emscripten's GLFW) ---------------
+# GLFW_INCLUDE_NONE: glfw3.h must not pull in the desktop <GL/gl.h> (conflicts with our GLES2 + macros).
+target_compile_definitions(cocos2d PUBLIC GLFW_INCLUDE_NONE)
+if(PGMMV_WITH_GLVIEW)
+    # CCGLViewImpl-desktop.h does #include "glfw3.h" (no GLFW/ prefix)
+    find_path(PGMMV_GLFW_INCLUDE glfw3.h
+        HINTS "${EMSCRIPTEN_SYSROOT}/include/GLFW" "${EMSCRIPTEN_ROOT_PATH}/cache/sysroot/include/GLFW"
+        NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+    message(STATUS "pgmmv: glfw include dir = ${PGMMV_GLFW_INCLUDE}")
+    target_include_directories(cocos2d PUBLIC ${PGMMV_GLFW_INCLUDE})
+endif()
+
+# --- round-4: pieces of 3d / ui that 2d code needs at link time ---------------------------------
+# NavMesh: PGMMV does not use it; ccConfig.h has #ifndef CC_USE_NAVMESH. PUBLIC because Scene's layout depends on it.
+target_compile_definitions(cocos2d PUBLIC CC_USE_NAVMESH=0)
+# ui module (CCActionProgressTimer.cpp uses ui::LoadingBar). No platform EditBox impl on Emscripten -> drop UIEditBox.
+include("${COCOS_DIR}/ui/CMakeLists.txt")
+set(_ui_src ${COCOS_UI_SRC})
+list(FILTER _ui_src EXCLUDE REGEX "UIEditBox")
+# 3d: only what CCCamera.cpp needs (frustum culling)
+set(_3d_src 3d/CCPlane.cpp 3d/CCFrustum.cpp 3d/CCAABB.cpp 3d/CCOBB.cpp)
+set(_extra ${_ui_src} ${_3d_src})
+list(TRANSFORM _extra PREPEND "${COCOS_DIR}/")
+list(LENGTH _extra _extra_n)
+message(STATUS "pgmmv: round-4 extra sources = ${_extra_n}")
+target_sources(cocos2d PRIVATE ${_extra})
+
+# --- round-5: runtime smoke test (no game assets, no scripting) ---------------------------------
+# Consumers of cocos2d need the thread + port + GLFW link options too.
+target_link_options(cocos2d INTERFACE -pthread -sUSE_GLFW=3 ${PGMMV_PORT_FLAGS})
+add_executable(hello_app test/hello_app.cpp)
+target_link_libraries(hello_app PRIVATE cocos2d)
+# default stack is only 64 KB; the scene-graph recursion needs more
+target_link_options(hello_app PRIVATE -sSTACK_SIZE=5242880 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=134217728 -sASSERTIONS=1)
+set_target_properties(hello_app PROPERTIES SUFFIX ".html" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/web")
+
+# --- round-5b: debug aid - log the GL call that raises an error (test/gl_trace.js) ----------------
+target_link_options(hello_app PRIVATE "SHELL:--pre-js ${CMAKE_SOURCE_DIR}/test/gl_trace.js")
+set_property(TARGET hello_app APPEND PROPERTY LINK_DEPENDS "${CMAKE_SOURCE_DIR}/test/gl_trace.js")
+
+# --- round-5c: client-side vertex arrays (LayerColor etc.) are illegal in WebGL; Emscripten can emulate them ---
+target_link_options(hello_app PRIVATE -sFULL_ES2=1 "SHELL:--pre-js ${CMAKE_SOURCE_DIR}/test/js_errors.js")
+
+# --- round-6: A/B test - same program WITHOUT -sFULL_ES2 (FULL_ES2 stays on hello_app only) --------------------
+add_executable(hello_nofull test/hello_app.cpp)
+target_link_libraries(hello_nofull PRIVATE cocos2d)
+target_link_options(hello_nofull PRIVATE -sSTACK_SIZE=5242880 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=134217728 -sASSERTIONS=1
+                    "SHELL:--pre-js ${CMAKE_SOURCE_DIR}/test/js_errors.js")
+set_target_properties(hello_nofull PROPERTIES SUFFIX ".html" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/web")
