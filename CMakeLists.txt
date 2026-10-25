@@ -146,3 +146,7 @@ target_link_libraries(hello_nofull PRIVATE cocos2d)
 target_link_options(hello_nofull PRIVATE -sSTACK_SIZE=5242880 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=134217728 -sASSERTIONS=1
                     "SHELL:--pre-js ${CMAKE_SOURCE_DIR}/test/js_errors.js")
 set_target_properties(hello_nofull PROPERTIES SUFFIX ".html" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/web")
+
+# --- round-7: GL call-sequence logger for one frame (page address ?seq) --------------------------------
+target_link_options(hello_app PRIVATE "SHELL:--pre-js ${CMAKE_SOURCE_DIR}/test/gl_seq.js")
+set_property(TARGET hello_app APPEND PROPERTY LINK_DEPENDS "${CMAKE_SOURCE_DIR}/test/gl_seq.js")

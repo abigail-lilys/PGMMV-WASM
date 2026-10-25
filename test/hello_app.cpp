@@ -1,67 +1,158 @@
-// Runtime smoke test v6 (A/B build test: hello_app = FULL_ES2, hello_nofull = no FULL_ES2).
-// Background is a DrawNode (not LayerColor, which needs client-side arrays), plus 7 DrawNodes that each differ in ONE factor.
+// Render regression suite v10: automatic PASS/FAIL for the render paths PGMMV will need.
 #include "cocos2d.h"
-#include <emscripten.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string>
 #include <vector>
 
 USING_NS_CC;
 
-struct Probe { const char* name; Vec2 p; };
-static std::vector<Probe> g_probes;
-static const char* g_stage = "start";
-static bool g_readNow = false;
+struct Check { std::string name; int x, y, r, g, b, tol; };
+static std::vector<Check> g_checks;
+static int g_round = 0;
 
-static void chk(const char* tag)
+static void addCheck(const char* name, int x, int y, int r, int g, int b, int tol = 4)
 {
-    int n = 0;
-    GLenum e;
-    while ((e = glGetError()) != GL_NO_ERROR && n++ < 8)
-        printf("[smoke] GL error 0x%04X after %s\n", e, tag);
+    g_checks.push_back({name, x, y, r, g, b, tol});
 }
 
-static void readPixelsReport(const char* tag)
+static void runChecks(const char* stage)
 {
-    printf("[smoke] px stage=%s %s frames=%u\n", g_stage, tag, (unsigned)Director::getInstance()->getTotalFrames());
-    for (const auto& pr : g_probes)
+    int pass = 0, fail = 0;
+    printf("[test] ---- %s (frames=%u) ----\n", stage, (unsigned)Director::getInstance()->getTotalFrames());
+    for (const auto& c : g_checks)
     {
-        unsigned char c[4] = {0, 0, 0, 0};
-        glReadPixels((int)pr.p.x, (int)pr.p.y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, c);
-        printf("[smoke]   %-14s (%3d,%3d) = %3u,%3u,%3u\n", pr.name, (int)pr.p.x, (int)pr.p.y, c[0], c[1], c[2]);
+        unsigned char px[4] = {0, 0, 0, 0};
+        glReadPixels(c.x, c.y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        bool ok = abs((int)px[0] - c.r) <= c.tol && abs((int)px[1] - c.g) <= c.tol && abs((int)px[2] - c.b) <= c.tol;
+        ok ? ++pass : ++fail;
+        printf("[test] %s %-34s (%3d,%3d) expect %3d,%3d,%3d got %3u,%3u,%3u\n", ok ? "PASS" : "FAIL", c.name.c_str(),
+               c.x, c.y, c.r, c.g, c.b, px[0], px[1], px[2]);
     }
+    GLenum e = glGetError();
+    printf("[test] SUMMARY %s: pass=%d fail=%d  glError=0x%04X\n", stage, pass, fail, (unsigned)e);
 }
 
-static void mk(Scene* s, const char* name, Vec2 pos, bool rect, bool circle, float rot, bool action)
+static Sprite* spriteFromRGBA(int w, int h, const std::vector<unsigned char>& d)
+{
+    auto tex = new Texture2D();
+    tex->initWithData(d.data(), d.size(), Texture2D::PixelFormat::RGBA8888, w, h, Size(w, h));
+    auto s = Sprite::createWithTexture(tex);
+    tex->release();
+    return s;
+}
+
+static Sprite* solidSprite(unsigned char r, unsigned char g, unsigned char b)
+{
+    std::vector<unsigned char> d(32 * 32 * 4);
+    for (int i = 0; i < 32 * 32; ++i) { d[i * 4] = r; d[i * 4 + 1] = g; d[i * 4 + 2] = b; d[i * 4 + 3] = 255; }
+    return spriteFromRGBA(32, 32, d);
+}
+
+static Sprite* splitSprite()   // left half yellow, right half cyan
+{
+    std::vector<unsigned char> d(32 * 32 * 4);
+    for (int y = 0; y < 32; ++y)
+        for (int x = 0; x < 32; ++x)
+        {
+            unsigned char* p = &d[(y * 32 + x) * 4];
+            bool left = x < 16;
+            p[0] = left ? 255 : 0; p[1] = 255; p[2] = left ? 0 : 255; p[3] = 255;
+        }
+    return spriteFromRGBA(32, 32, d);
+}
+
+static DrawNode* rectNode(Vec2 pos, float hw, float hh, Color4F c)
 {
     auto dn = DrawNode::create();
-    if (rect)   dn->drawSolidRect(Vec2(-50, -30), Vec2(50, 30), Color4F(0.9f, 0.4f, 0.2f, 1.0f));     // 230,102,51
-    if (circle) dn->drawSolidCircle(Vec2(0, 0), 20, 0, 32, Color4F(0.2f, 0.7f, 0.9f, 1.0f));          // 51,179,230
+    dn->drawSolidRect(Vec2(-hw, -hh), Vec2(hw, hh), c);
     dn->setPosition(pos);
-    if (rot != 0) dn->setRotation(rot);
-    if (action)   dn->runAction(RepeatForever::create(RotateBy::create(4.0f, 360)));
-    s->addChild(dn);
-    g_probes.push_back({name, pos});
+    return dn;
+}
+
+static LayerColor* squareLayer(Vec2 center, float size, Color4B c)
+{
+    auto lc = LayerColor::create(c, size, size);
+    lc->setPosition(center - Vec2(size / 2, size / 2));
+    return lc;
+}
+
+static RenderTexture* makeRT(bool depthStencil)
+{
+    RenderTexture* rt = depthStencil
+        ? RenderTexture::create(64, 64, Texture2D::PixelFormat::RGBA8888, GL_DEPTH24_STENCIL8)
+        : RenderTexture::create(64, 64, Texture2D::PixelFormat::RGBA8888);
+    if (!rt) { printf("[test] RenderTexture::create FAILED (depthStencil=%d)\n", (int)depthStencil); return nullptr; }
+    rt->beginWithClear(0, 0, 1, 1);                       // blue
+    auto dn = rectNode(Vec2(32, 32), 16, 16, Color4F(1, 1, 0, 1));   // yellow 32x32 in the middle
+    dn->visit(Director::getInstance()->getRenderer(), Mat4::IDENTITY, 0);
+    rt->end();
+    return rt;
 }
 
 static Scene* buildScene()
 {
-    g_probes.clear();
     auto s = Scene::create();
-    auto bg = DrawNode::create();
-    bg->drawSolidRect(Vec2(0, 0), Vec2(960, 640), Color4F(0.0f, 0.43f, 0.235f, 1.0f));   // ~0,110,60
-    s->addChild(bg);
-    mk(s, "rect-static",   Vec2(120, 520), true,  false, 0,  false);
-    mk(s, "circle-static", Vec2(280, 520), false, true,  0,  false);
-    mk(s, "both-static",   Vec2(440, 520), true,  true,  0,  false);
-    mk(s, "rect-rot30",    Vec2(600, 520), true,  false, 30, false);
-    mk(s, "rect-action",   Vec2(760, 520), true,  false, 0,  true);
-    mk(s, "both-action",   Vec2(200, 300), true,  true,  0,  true);
-    mk(s, "both-rot30",    Vec2(480, 300), true,  true,  30, false);
-    s->schedule([](float) {
-        static int n = 0;
-        printf("[smoke] heartbeat %d  frames=%u  t=%.0fms\n", ++n, (unsigned)Director::getInstance()->getTotalFrames(),
-               emscripten_get_now());
-    }, 2.0f, "smoke_tick");
+    s->addChild(LayerColor::create(Color4B(30, 30, 30, 255)), -100);
+    addCheck("bg LayerColor", 940, 620, 30, 30, 30);
+
+    // stencil: green layer clipped to a circle
+    auto stencil = DrawNode::create();
+    stencil->drawSolidCircle(Vec2(190, 450), 100, 0, 48, Color4F(1, 1, 1, 1));
+    auto clip = ClippingNode::create(stencil);
+    auto green = LayerColor::create(Color4B(0, 160, 0, 255), 300, 300);
+    green->setPosition(Vec2(40, 300));
+    clip->addChild(green);
+    s->addChild(clip);
+    addCheck("clip inside circle", 190, 450, 0, 160, 0);
+    addCheck("clip outside circle (corner)", 60, 310, 30, 30, 30);
+
+    auto grad = LayerGradient::create(Color4B(255, 0, 0, 255), Color4B(0, 0, 255, 255));
+    grad->setContentSize(Size(200, 200));
+    grad->setPosition(Vec2(360, 420));
+    s->addChild(grad);
+    addCheck("LayerGradient centre", 460, 520, 127, 0, 127, 10);
+
+    s->addChild(rectNode(Vec2(700, 520), 50, 30, Color4F(0.9f, 0.4f, 0.2f, 1)));
+    addCheck("DrawNode after gradient", 700, 520, 230, 102, 51);
+
+    auto sp = splitSprite();
+    sp->setScale(2.0f); sp->setPosition(Vec2(640, 380));
+    s->addChild(sp);
+    addCheck("Sprite left half (yellow)", 624, 380, 255, 255, 0);
+    addCheck("Sprite right half (cyan)", 656, 380, 0, 255, 255);
+
+    auto sa = solidSprite(255, 255, 0);
+    sa->setScale(2.0f); sa->setPosition(Vec2(780, 380)); sa->setOpacity(128);
+    s->addChild(sa);
+    addCheck("Sprite opacity 128 blend", 780, 380, 143, 143, 15, 8);
+
+    // client-array <-> VAO transitions, repeated
+    s->addChild(squareLayer(Vec2(100, 150), 80, Color4B(200, 0, 200, 255)));
+    s->addChild(rectNode(Vec2(200, 150), 40, 30, Color4F(0.9f, 0.4f, 0.2f, 1)));
+    auto sm = solidSprite(255, 255, 0); sm->setScale(2.0f); sm->setPosition(Vec2(300, 150)); s->addChild(sm);
+    s->addChild(squareLayer(Vec2(400, 150), 80, Color4B(200, 0, 200, 255)));
+    s->addChild(rectNode(Vec2(500, 150), 40, 30, Color4F(0.2f, 0.7f, 0.9f, 1)));
+    addCheck("mix: LayerColor", 100, 150, 200, 0, 200);
+    addCheck("mix: DrawNode", 200, 150, 230, 102, 51);
+    addCheck("mix: Sprite", 300, 150, 255, 255, 0);
+    addCheck("mix: LayerColor again", 400, 150, 200, 0, 200);
+    addCheck("mix: DrawNode again", 500, 150, 51, 178, 229);
+
+    if (auto rtA = makeRT(false))
+    {
+        rtA->setPosition(Vec2(700, 250));
+        s->addChild(rtA);
+        addCheck("RenderTexture A centre (yellow)", 700, 250, 255, 255, 0);
+        addCheck("RenderTexture A edge (blue)", 724, 250, 0, 0, 255);
+    }
+    if (auto rtB = makeRT(true))
+    {
+        rtB->setPosition(Vec2(820, 250));
+        s->addChild(rtB);
+        addCheck("RenderTexture B(depth+stencil) centre", 820, 250, 255, 255, 0);
+        addCheck("RenderTexture B(depth+stencil) edge", 844, 250, 0, 0, 255);
+    }
     return s;
 }
 
@@ -86,32 +177,28 @@ public:
         glview->setDesignResolutionSize(960, 640, ResolutionPolicy::SHOW_ALL);
         director->setDisplayStats(true);
         director->setAnimationInterval(1.0f / 60);
-        director->setProjection(Director::Projection::_2D);   // PGMMV is a 2D game
+        director->setProjection(Director::Projection::_2D);
 
-        printf("[smoke] expected: bg ~0,110,60 | rect centre 230,102,51 | circle centre 51,179,230\n");
+        GLint depthBits = 0, stencilBits = 0;
+        glGetIntegerv(GL_DEPTH_BITS, &depthBits);
+        glGetIntegerv(GL_STENCIL_BITS, &stencilBits);
+        printf("[test] depth bits=%d stencil bits=%d  frame=%.0fx%.0f\n", (int)depthBits, (int)stencilBits,
+               glview->getFrameSize().width, glview->getFrameSize().height);
+
+        auto scene = buildScene();
+        GLenum e = glGetError();
+        printf("[test] scene built, %d checks, glError=0x%04X\n", (int)g_checks.size(), (unsigned)e);
 
         director->getEventDispatcher()->addCustomEventListener(Director::EVENT_AFTER_DRAW, [](EventCustom*) {
             static int f = 0;
             ++f;
-            if (f <= 2 || g_readNow)
-            {
-                g_readNow = false;
-                char b[24];
-                snprintf(b, sizeof b, "frame#%d", f);
-                chk(b);
-                readPixelsReport(b);
-            }
+            if (f == 90)  runChecks("round 1 (frame 90)");
+            if (f == 300) runChecks("round 2 (frame 300)");
         });
-
-        auto scene = buildScene();
         director->runWithScene(scene);
-        scene->scheduleOnce([](float) { g_stage = "2D@3s"; g_readNow = true; }, 3.0f, "st1");
-        scene->scheduleOnce([](float) { g_stage = "2D@6s (rotation has moved on)"; g_readNow = true; }, 6.0f, "st2");
-
-        printf("[smoke] applicationDidFinishLaunching done\n");
+        printf("[test] applicationDidFinishLaunching done\n");
         return true;
     }
-
     virtual void applicationDidEnterBackground() override { Director::getInstance()->stopAnimation(); }
     virtual void applicationWillEnterForeground() override { Director::getInstance()->startAnimation(); }
 };
@@ -120,6 +207,6 @@ int main(int, char**)
 {
     static SmokeApp app;
     int r = Application::getInstance()->run();
-    printf("[smoke] run() returned %d\n", r);
+    printf("[test] run() returned %d\n", r);
     return r;
 }
