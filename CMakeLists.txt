@@ -95,7 +95,8 @@ include(${CMAKE_CURRENT_LIST_DIR}/external.cmake)
 # MSVC's STL headers pull in <list> etc. transitively; clang's do not.
 target_compile_options(cocos2d PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include list>")
 # Controller group is disabled on Emscripten for now (Controller is an incomplete type).
-set_source_files_properties("${COCOS_DIR}/base/CCEventListenerController.cpp" PROPERTIES HEADER_FILE_ONLY TRUE)
+# [wasm-port] controller now compiled on Emscripten too (CCController.h/.cpp guards extended)
+# set_source_files_properties("${COCOS_DIR}/base/CCEventListenerController.cpp" PROPERTIES HEADER_FILE_ONLY TRUE)
 
 # --- round-3: GLView (the desktop GLFW implementation on top of Emscripten's GLFW) ---------------
 # GLFW_INCLUDE_NONE: glfw3.h must not pull in the desktop <GL/gl.h> (conflicts with our GLES2 + macros).
@@ -117,7 +118,7 @@ include("${COCOS_DIR}/ui/CMakeLists.txt")
 set(_ui_src ${COCOS_UI_SRC})
 list(FILTER _ui_src EXCLUDE REGEX "UIEditBox")
 # 3d: only what CCCamera.cpp needs (frustum culling)
-set(_3d_src 3d/CCPlane.cpp 3d/CCFrustum.cpp 3d/CCAABB.cpp 3d/CCOBB.cpp)
+set(_3d_src 3d/CCPlane.cpp 3d/CCFrustum.cpp 3d/CCAABB.cpp 3d/CCOBB.cpp 3d/CCRay.cpp)
 set(_extra ${_ui_src} ${_3d_src})
 list(TRANSFORM _extra PREPEND "${COCOS_DIR}/")
 list(LENGTH _extra _extra_n)
@@ -150,3 +151,223 @@ set_target_properties(hello_nofull PROPERTIES SUFFIX ".html" RUNTIME_OUTPUT_DIRE
 # --- round-7: GL call-sequence logger for one frame (page address ?seq) --------------------------------
 target_link_options(hello_app PRIVATE "SHELL:--pre-js ${CMAKE_SOURCE_DIR}/test/gl_seq.js")
 set_property(TARGET hello_app APPEND PROPERTY LINK_DEPENDS "${CMAKE_SOURCE_DIR}/test/gl_seq.js")
+
+# --- round-8: Classes (PGMMV business code) - first compile attempt, to get an inventory of the real errors ---
+option(PGMMV_WITH_CLASSES "Build the PGMMV Classes (business code) static library" OFF)
+if(PGMMV_WITH_CLASSES)
+    set(PLAYER_DIR "${PGMMV_SRC}/Player")
+    include(${CMAKE_CURRENT_LIST_DIR}/classes_sources.cmake)
+    set(PGMMV_CLASSES_SRC ${PGMMV_CLASSES_REL})
+    list(TRANSFORM PGMMV_CLASSES_SRC PREPEND "${PLAYER_DIR}/")
+    add_library(pgmmv_classes STATIC ${PGMMV_CLASSES_SRC})
+    target_compile_features(pgmmv_classes PUBLIC cxx_std_14)
+    target_link_libraries(pgmmv_classes PUBLIC cocos2d)
+    target_include_directories(pgmmv_classes PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/shim
+        ${PLAYER_DIR} ${PLAYER_DIR}/Classes ${PLAYER_DIR}/Classes/External ${PLAYER_DIR}/Classes/Manager
+        ${PLAYER_DIR}/Classes/External/vlc/include
+        ${EXT_DIR}/chipmunk/include/chipmunk ${COCOS2DX_ROOT_PATH}/extensions ${EXT_DIR}/ImGUI ${COCOS_DIR}/audio/include
+        ${CMAKE_CURRENT_LIST_DIR}/prebuilt/sm34/include)
+    # WIN32 / _WINDOWS from the Windows project are deliberately NOT defined.
+    target_compile_definitions(pgmmv_classes PRIVATE _USE_MATH_DEFINES AGTKPLAYER_EXPORTS)
+    # the Windows project force-includes stdafx.h into every source
+    target_compile_options(pgmmv_classes PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include stdafx.h>")
+    if(PGMMV_QUIET)
+        target_compile_options(pgmmv_classes PRIVATE -w)
+    endif()
+endif()
+
+# --- round-8b: use the real proj.win32/stdafx.h; make MSVC-only __declspec vanish; show ALL errors ---------
+if(PGMMV_WITH_CLASSES)
+    target_include_directories(pgmmv_classes BEFORE PRIVATE ${PLAYER_DIR}/proj.win32)
+    target_compile_definitions(pgmmv_classes PRIVATE "__declspec(x)=")
+    target_compile_options(pgmmv_classes PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include list>" -ferror-limit=0)
+endif()
+
+# --- round-8c: MSVC compatibility for the Classes sources --------------------------------------------------
+if(PGMMV_WITH_CLASSES)
+    # 1) __declspec(dllexport/dllimport) behind AGTKPLAYER_API. A -D with parentheses was silently dropped by CMake,
+    #    so the macro is defined in a header that is force-included BEFORE stdafx.h.
+    target_compile_options(pgmmv_classes BEFORE PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include msvc_compat.h>")
+    # 2) MSVC does not diagnose errors inside uninstantiated template bodies (MtVector const-correctness, old
+    #    RapidJSON GenericStringRef::operator=); clang does at definition time. Delay template body parsing like MSVC.
+    target_compile_options(pgmmv_classes PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-fdelayed-template-parsing>")
+endif()
+
+# --- round-8d: accept MSVC language extensions used in the Classes headers --------------------------------
+# 'extra qualification on member' (class-scope Foo::bar declarations) and other Microsoft extensions.
+# NOT -fms-compatibility: that would define _MSC_VER and send #ifdef _MSC_VER code down Windows-only paths.
+if(PGMMV_WITH_CLASSES)
+    target_compile_options(pgmmv_classes PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-fms-extensions>")
+endif()
+
+# --- round-8e: expose ImageMtTask / Image::initWithImageFileLateSetup on Emscripten --------------------------
+# Windows gets IMAGE_MT_INIT=1 from cocos2d/cocos/2d/cocos2d_headers.props; the Emscripten build must define it
+# itself, otherwise CCImage.h hides both the ImageMtTask class and initWithImageFileLateSetup (AppDelegate,
+# AssetData, ProjectLoadingManager use them). PUBLIC on cocos2d so pgmmv_classes inherits it via link.
+if(PGMMV_WITH_CLASSES)
+    target_compile_definitions(cocos2d PUBLIC IMAGE_MT_INIT=1)
+endif()
+
+# --- round-9: link probe for pgmmv_classes ---------------------------------------------------------------
+# Whole-archive + --no-gc-sections so the gc does not hide missing symbols (see decision record, item 14).
+# Expect this link to FAIL until the remaining pieces (js-bindings, audio, imgui, vlc, dinput) are added.
+if(PGMMV_WITH_CLASSES)
+    add_executable(classes_probe test/classes_probe.cpp)
+    target_link_libraries(classes_probe PRIVATE
+        "-Wl,--whole-archive" "$<TARGET_FILE:pgmmv_classes>" "-Wl,--no-whole-archive"
+        cocos2d
+        "${CMAKE_CURRENT_LIST_DIR}/prebuilt/sm34/lib/libjs_static.a"
+        "${CMAKE_CURRENT_LIST_DIR}/prebuilt/sm34/lib/libnspr4.a"
+        "${CMAKE_CURRENT_LIST_DIR}/prebuilt/sm34/lib/libplc4.a"
+        "${CMAKE_CURRENT_LIST_DIR}/prebuilt/sm34/lib/libplds4.a")
+    target_link_options(classes_probe PRIVATE -sFULL_ES2=1 -Wl,--no-gc-sections
+        -sSTACK_SIZE=5242880 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=268435456 -sASSERTIONS=1)
+    set_target_properties(classes_probe PROPERTIES SUFFIX ".html" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/web")
+endif()
+
+# --- round-9b: ImGui core (imgui.cpp + imgui_draw.cpp) for the link probe -----------------------------
+# Old ImGui: widgets live in imgui.cpp (there is no imgui_widgets.cpp). Platform backends, imgui_demo.cpp,
+# IMGUIGLViewImpl.cpp, CCIMGUI.cpp and ImGuiLayer.cpp are excluded: the probe does not miss any symbol from
+# them because the classes side guards those calls with #if (WIN32 || MAC).
+if(PGMMV_WITH_CLASSES)
+    add_library(ext_imgui STATIC
+        ${EXT_DIR}/ImGUI/imgui.cpp
+        ${EXT_DIR}/ImGUI/imgui_draw.cpp)
+    target_include_directories(ext_imgui PUBLIC ${EXT_DIR}/ImGUI)
+    target_compile_options(ext_imgui PRIVATE -w)
+    target_link_libraries(classes_probe PRIVATE ext_imgui)
+endif()
+
+# --- round-9c: imgui.h includes "cocos2d.h"; add the cocos root to ext_imgui's include path -------------
+# extra call (CMake appends to the existing include list) -- marker: ext_imgui_extra_includes
+if(PGMMV_WITH_CLASSES)
+    target_include_directories(ext_imgui PUBLIC ${COCOS_DIR} ${COCOS2DX_ROOT_PATH})
+endif()
+
+# --- round-9d: ext_imgui includes cocos2d.h (which pulls CCGLViewImpl-desktop.h -> glfw3.h) ---------------
+# extra call, CMake merges these with the earlier target_link_libraries/target_compile_options.
+# marker: ext_imgui_inherit_cocos2d
+if(PGMMV_WITH_CLASSES)
+    target_link_libraries(ext_imgui PUBLIC cocos2d)
+    target_compile_options(ext_imgui PRIVATE -sUSE_GLFW=3)
+endif()
+
+# --- round-10: js-bindings, minimal subset first (ScriptingCore + module register + conversions) --------
+# marker: ext_jsb_minimal
+# ScriptingCore.cpp and js_manual_conversions.cpp are ~2.9k lines each. Compile these three first to see
+# how many SpiderMonkey 33->34 API changes are needed, before pulling in the other 23 auto/manual files.
+if(PGMMV_WITH_CLASSES)
+    set(JSB_DIR ${COCOS_DIR}/scripting/js-bindings)
+    add_library(ext_jsb STATIC
+        ${JSB_DIR}/manual/ScriptingCore.cpp
+        ${JSB_DIR}/manual/js_module_register.cpp
+        ${JSB_DIR}/manual/js_manual_conversions.cpp)
+    target_link_libraries(ext_jsb PUBLIC cocos2d)
+    target_include_directories(ext_jsb PRIVATE ${COCOS_DIR} ${CMAKE_CURRENT_LIST_DIR}/shim)
+    target_compile_options(ext_jsb PRIVATE -w)
+endif()
+
+# --- round-10b: js-bindings needs the SpiderMonkey headers (jsapi.h) -------------------------------------
+# marker: ext_jsb_sm34_includes
+if(PGMMV_WITH_CLASSES)
+    target_include_directories(ext_jsb PRIVATE ${CMAKE_CURRENT_LIST_DIR}/prebuilt/sm34/include)
+endif()
+
+# --- round-10c: link the minimal js-bindings subset into the probe ----------------------------------------
+# marker: classes_probe_jsb
+if(PGMMV_WITH_CLASSES)
+    target_link_libraries(classes_probe PRIVATE ext_jsb)
+endif()
+
+# --- round-11: audio module (win32/OpenAL implementation) -----------------------------------------------
+# marker: ext_audio
+# MciPlayer.cpp and SimpleAudioEngine.cpp are Windows-only (MCI API) and are excluded.
+if(PGMMV_WITH_CLASSES)
+    set(AUDIO_DIR ${COCOS_DIR}/audio)
+    add_library(ext_audio STATIC
+        ${AUDIO_DIR}/AudioEngine.cpp
+        ${AUDIO_DIR}/win32/AudioEngine-win32.cpp
+        ${AUDIO_DIR}/win32/AudioCache.cpp
+        ${AUDIO_DIR}/win32/AudioDecoder.cpp
+        ${AUDIO_DIR}/win32/AudioDecoderManager.cpp
+        ${AUDIO_DIR}/win32/AudioDecoderMp3.cpp
+        ${AUDIO_DIR}/win32/AudioDecoderOgg.cpp
+        ${AUDIO_DIR}/win32/AudioPlayer.cpp)
+    target_link_libraries(ext_audio PUBLIC cocos2d)
+    target_include_directories(ext_audio PRIVATE ${COCOS_DIR} ${CMAKE_CURRENT_LIST_DIR}/shim)
+    target_compile_options(ext_audio PRIVATE -w)
+    target_link_libraries(classes_probe PRIVATE ext_audio)
+endif()
+
+# --- round-11b: Emscripten ports for the audio decoders -------------------------------------------------
+# vorbis/vorbisfile.h (AudioDecoder.h) and mpg123.h are only available once the ports are enabled.
+# marker: ext_audio_ports
+if(PGMMV_WITH_CLASSES)
+    target_compile_options(ext_audio PRIVATE -sUSE_VORBIS=1 -sUSE_OGG=1 -sUSE_MPG123=1)
+    target_link_options(ext_audio INTERFACE -sUSE_VORBIS=1 -sUSE_OGG=1 -sUSE_MPG123=1)
+endif()
+
+# --- round-12: stub out the two reentrant protoent lookups NSPR references (musl lacks them) -------------
+# marker: classes_probe_netdb_stubs
+if(PGMMV_WITH_CLASSES)
+    target_sources(classes_probe PRIVATE ${CMAKE_CURRENT_LIST_DIR}/shim/netdb_stubs.c)
+endif()
+
+# --- round-12b: stub implementation of DllPluginManager (abstract base; win32 impl is excluded) ---------
+# marker: pgmmv_classes_dllplugin_stub
+if(PGMMV_WITH_CLASSES)
+    target_sources(pgmmv_classes PRIVATE ${CMAKE_CURRENT_LIST_DIR}/shim/DllPluginManager-stub.cpp)
+    target_include_directories(pgmmv_classes PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/shim)
+endif()
+
+# --- round-13: IMGUIGLViewImpl (needed for typeinfo + setFullScreen/restoreScreen/focusWindow) -----------
+# and SysV semaphore stubs for NSPR's ptsynch.o.
+# marker: imguig_view_and_sem_stubs
+if(PGMMV_WITH_CLASSES)
+#    target_sources(ext_imgui PRIVATE ${EXT_DIR}/ImGUI/IMGUIGLViewImpl.cpp)  # [wasm-port] needs GLEW; handled by #if in DebugManager.cpp
+    target_sources(classes_probe PRIVATE ${CMAKE_CURRENT_LIST_DIR}/shim/sysv_sem_stubs.c)
+endif()
+
+# --- round-14: forward headers + GLFW backend stub so IMGUIGLViewImpl.cpp compiles on Emscripten --------
+# marker: ext_imgui_glfw_stub
+if(PGMMV_WITH_CLASSES)
+    target_include_directories(ext_imgui BEFORE PRIVATE ${CMAKE_CURRENT_LIST_DIR}/shim)
+    target_sources(ext_imgui PRIVATE ${CMAKE_CURRENT_LIST_DIR}/shim/imgui_impl_glfw_stub.cpp)
+endif()
+
+# --- round-16: cocos2d_specifics.cpp provides get_or_create_js_obj / JSScheduleWrapper / __JSPlistDelegator
+# marker: ext_jsb_specifics
+if(PGMMV_WITH_CLASSES)
+    target_sources(ext_jsb PRIVATE ${COCOS_DIR}/scripting/js-bindings/manual/cocos2d_specifics.cpp)
+endif()
+
+# --- round-17: auto/jsb_cocos2dx_auto.cpp provides the *_prototype globals and js_cocos2dx_Action_update;
+#     manual/js_bindings_core.cpp provides the jsb_*_proxy helpers (jsb_get/set_jsobject_for_proxy, ...).
+# marker: ext_jsb_auto_core
+if(PGMMV_WITH_CLASSES)
+    target_sources(ext_jsb PRIVATE
+        ${COCOS_DIR}/scripting/js-bindings/auto/jsb_cocos2dx_auto.cpp
+        ${COCOS_DIR}/scripting/js-bindings/manual/js_bindings_core.cpp)
+endif()
+
+# --- round-18: ComponentJS + EventListener manual bindings for jsb_cocos2dx_auto / cocos2d_specifics
+# marker: ext_jsb_component_event
+if(PGMMV_WITH_CLASSES)
+    target_sources(ext_jsb PRIVATE
+        ${COCOS_DIR}/scripting/js-bindings/manual/component/CCComponentJS.cpp
+        ${COCOS_DIR}/scripting/js-bindings/manual/jsb_event_dispatcher_manual.cpp)
+endif()
+
+# --- round-18b: SimpleAudioEngine stub (win32 MCI impl excluded; real audio via AudioEngine)
+# marker: ext_jsb_simpleaudio_stub
+if(PGMMV_WITH_CLASSES)
+    target_sources(ext_jsb PRIVATE ${CMAKE_CURRENT_LIST_DIR}/shim/SimpleAudioEngine-stub.cpp)
+    target_include_directories(ext_jsb PRIVATE ${COCOS_DIR}/audio/include)
+endif()
+
+# --- round-19: typeinfo for cocos2d::Controller (platform ctor/dtor files are excluded) + win32 audio impl
+# marker: ext_jsb_controller_typeinfo
+if(PGMMV_WITH_CLASSES)
+    target_sources(ext_jsb PRIVATE ${CMAKE_CURRENT_LIST_DIR}/shim/controller_typeinfo_stub.cpp)
+endif()
