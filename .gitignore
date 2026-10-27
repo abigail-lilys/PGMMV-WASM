@@ -1,0 +1,23 @@
+# 忽略备份和编译中间件
+*.user
+*.qm
+Installer/
+*.win32
+*.bak*
+*.before-pd-diag*
+__pycache__/
+*.pyc
+
+# 忽略庞大的 cocos2d-x 预编译第三方库和工具（WASM 不需要）
+Player/cocos2d/external/
+Player/cocos2d/tools/
+Player/cocos2d/build/
+
+# 忽略除了 proj.win32 以外的其他平台工程
+Player/proj.android/
+Player/proj.android-studio/
+Player/proj.ios_mac/
+Player/proj.linux/
+Player/proj.tizen/
+Player/proj.win10/
+Player/proj.win8.1-universal/
