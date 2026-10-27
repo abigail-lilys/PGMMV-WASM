@@ -41,3 +41,16 @@ emcmake cmake ..
 emmake make pgmmv_classes -j3
 emmake make pgmmv -j3
 
+
+## 🚀 帧率 (FPS) 优化指南 (Main 侧)
+
+除了构建配置，C++ 源码侧的高频打印和空指针异常也会严重影响性能。
+
+1. **清理高频调试打印**
+   - **问题**：`pgmmv_main.cpp` 里的 `WASM-TICK`（每 3 秒打印场景树）和 `Tile.cpp` / `CCImage.cpp` 的 `printf` 会严重拖慢渲染。
+   - **优化**：通过恢复 `.bak` 备份，移除 `WASM-TICKER_V3` 和 `WASM-TILE-V2` 相关打印。
+2. **修复音频悬空指针无限刷屏 (`AudioEngine-win32.cpp`)**
+   - **问题**：场景切换时，失效的音频 ID 会导致 `AudioEngine::getVolume` 无限报错 `The audio instance X is non-existent`，拖死主线程。
+   - **优化**：在 `AudioEngine-win32.cpp` 的 9 处 `auto player = _audioPlayers[audioID];` 下方增加 `if (!player) return;` 等判空拦截，拒绝无效查询。
+3. **桩掉 JS 强制 GC (`JavascriptManager.cpp`)**
+   - 避免引擎在销毁场景时因强制 GC 导致越界崩溃或画面长时间卡死。
