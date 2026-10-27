@@ -1,6 +1,8 @@
 # PGMMV Player -> WebAssembly. Stage B, first target: libcocos2d.a (engine core only).
 # Uses the engine's own per-module CMakeLists.txt purely as source lists.
 cmake_minimum_required(VERSION 3.13)
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O1")
+
 project(pgmmv_wasm LANGUAGES C CXX)
 
 if(NOT EMSCRIPTEN)
@@ -337,6 +339,10 @@ if(PGMMV_WITH_CLASSES)
 endif()
 
 # --- round-16: cocos2d_specifics.cpp provides get_or_create_js_obj / JSScheduleWrapper / __JSPlistDelegator
+target_sources(ext_jsb PRIVATE ${COCOS_DIR}/scripting/js-bindings/manual/localstorage/js_bindings_system_functions.cpp) # WASM_ADD_LOCALSTORAGE3
+# WASM_ADD_LOCALSTORAGE
+target_sources(ext_jsb PRIVATE ${COCOS_DIR}/scripting/js-bindings/manual/localstorage/js_bindings_system_registration.cpp)
+
 # marker: ext_jsb_specifics
 if(PGMMV_WITH_CLASSES)
     target_sources(ext_jsb PRIVATE ${COCOS_DIR}/scripting/js-bindings/manual/cocos2d_specifics.cpp)
@@ -414,7 +420,7 @@ if(_probe_srcs)
         endif()
     endforeach()
 endif()
-foreach(_need netdb_stubs.c sysv_sem_stubs.c)
+foreach(_need netdb_stubs.c sysv_sem_stubs.c getrusage_stub.c) # WASM_GETRUSAGE_STUB
     set(_found FALSE)
     foreach(_s ${_shim_srcs})
         get_filename_component(_fn "${_s}" NAME)
@@ -439,7 +445,7 @@ endif()
 
 
 # --- 挂载测试游戏资源到 wasm 虚拟文件系统 ---
-target_link_options(pgmmv PRIVATE "-sASSERTIONS=2")
+target_link_options(pgmmv PRIVATE "-sASSERTIONS=0")
 # 挂载到 /app/Resources 匹配默认根目录
 if(EXISTS "${CMAKE_SOURCE_DIR}/test_game/Resources/data")
     target_link_options(pgmmv PRIVATE "--preload-file=${CMAKE_SOURCE_DIR}/test_game/Resources@/app/Resources") # WASM_PRELOAD_V1
@@ -450,8 +456,8 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/test_game/Resources/script")
 endif()
 
 # --- 调试用的强化配置 ---
-target_link_options(pgmmv PRIVATE -sASSERTIONS=2)
-target_link_options(pgmmv PRIVATE --profiling-funcs)
+target_link_options(pgmmv PRIVATE -sASSERTIONS=0)
+target_link_options(pgmmv PRIVATE )
 target_link_options(pgmmv PRIVATE -sSTACK_SIZE=8388608)
 
 # --- 保守策略：在 WebAssembly 下强制禁用 Windows 专用的预加载优化 ---

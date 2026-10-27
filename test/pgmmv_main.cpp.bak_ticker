@@ -1,0 +1,18 @@
+#include "AppDelegate.h"
+#include "platform/CCApplication.h"
+#include <cstdio>
+#include <emscripten.h>
+
+int main(int argc, char** argv)
+{
+    printf("\n=== [WASM] main() started ===\n"); fflush(stdout);
+
+    auto* app = new AppDelegate();
+    (void)app;
+
+    printf("=== [WASM] calling run() ===\n"); fflush(stdout);
+    int ret = cocos2d::Application::getInstance()->run();
+    
+    printf("=== [WASM] run() returned %d ===\n", ret); fflush(stdout);
+    return ret;
+}
