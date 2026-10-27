@@ -371,3 +371,90 @@ endif()
 if(PGMMV_WITH_CLASSES)
     target_sources(ext_jsb PRIVATE ${CMAKE_CURRENT_LIST_DIR}/shim/controller_typeinfo_stub.cpp)
 endif()
+
+# ---- PGMMV Player wasm 入口：复用 classes_probe 的编译/链接配置 ----
+add_executable(pgmmv test/pgmmv_main.cpp)
+
+foreach(_prop LINK_LIBRARIES LINK_OPTIONS COMPILE_DEFINITIONS COMPILE_OPTIONS INCLUDE_DIRECTORIES)
+    get_target_property(_val classes_probe ${_prop})
+    if(_val)
+        if(_prop STREQUAL "LINK_LIBRARIES")
+            target_link_libraries(pgmmv PRIVATE ${_val})
+        elseif(_prop STREQUAL "LINK_OPTIONS")
+            target_link_options(pgmmv PRIVATE ${_val})
+        elseif(_prop STREQUAL "COMPILE_DEFINITIONS")
+            target_compile_definitions(pgmmv PRIVATE ${_val})
+        elseif(_prop STREQUAL "COMPILE_OPTIONS")
+            target_compile_options(pgmmv PRIVATE ${_val})
+        elseif(_prop STREQUAL "INCLUDE_DIRECTORIES")
+            target_include_directories(pgmmv PRIVATE ${_val})
+        endif()
+    endif()
+endforeach()
+
+set_target_properties(pgmmv PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/web"
+    SUFFIX ".html"
+)
+
+# --- pgmmv 需要 Player/Classes（AppDelegate.h 等），pgmmv_classes 的 include 是 PRIVATE 不传递 ---
+if(DEFINED PLAYER_DIR AND IS_DIRECTORY "${PLAYER_DIR}/Classes")
+    target_include_directories(pgmmv PRIVATE "${PLAYER_DIR}/Classes")
+elseif(IS_DIRECTORY "${PGMMV_SRC}/Player/Classes")
+    target_include_directories(pgmmv PRIVATE "${PGMMV_SRC}/Player/Classes")
+endif()
+
+# --- pgmmv: NSPR shim（classes_probe 以 SOURCES 形式挂了 shim，属性复制不带 SOURCES）---
+get_target_property(_probe_srcs classes_probe SOURCES)
+set(_shim_srcs "")
+if(_probe_srcs)
+    foreach(_s ${_probe_srcs})
+        if(_s MATCHES "shim/")
+            list(APPEND _shim_srcs "${_s}")
+        endif()
+    endforeach()
+endif()
+foreach(_need netdb_stubs.c sysv_sem_stubs.c)
+    set(_found FALSE)
+    foreach(_s ${_shim_srcs})
+        get_filename_component(_fn "${_s}" NAME)
+        if(_fn STREQUAL "${_need}")
+            set(_found TRUE)
+        endif()
+    endforeach()
+    if(NOT _found)
+        set(_p "${CMAKE_CURRENT_SOURCE_DIR}/shim/${_need}")
+        if(EXISTS "${_p}")
+            list(APPEND _shim_srcs "${_p}")
+        endif()
+    endif()
+endforeach()
+if(_shim_srcs)
+    list(REMOVE_DUPLICATES _shim_srcs)
+    target_sources(pgmmv PRIVATE ${_shim_srcs})
+    message(STATUS "pgmmv: NSPR shim sources = ${_shim_srcs}")
+endif()
+
+
+
+
+# --- 挂载测试游戏资源到 wasm 虚拟文件系统 ---
+target_link_options(pgmmv PRIVATE "-sASSERTIONS=2")
+# 挂载到 /app/Resources 匹配默认根目录
+if(EXISTS "${CMAKE_SOURCE_DIR}/test_game/Resources/data")
+    target_link_options(pgmmv PRIVATE "--preload-file=${CMAKE_SOURCE_DIR}/test_game/Resources@/app/Resources") # WASM_PRELOAD_V1
+target_link_options(pgmmv PRIVATE -sFORCE_FILESYSTEM=1) # WASM_FORCE_FS_V1
+endif()
+if(EXISTS "${CMAKE_SOURCE_DIR}/test_game/Resources/script")
+    # WASM_PRELOAD_V1: script now covered by the full Resources preload above
+endif()
+
+# --- 调试用的强化配置 ---
+target_link_options(pgmmv PRIVATE -sASSERTIONS=2)
+target_link_options(pgmmv PRIVATE --profiling-funcs)
+target_link_options(pgmmv PRIVATE -sSTACK_SIZE=8388608)
+
+# --- 保守策略：在 WebAssembly 下强制禁用 Windows 专用的预加载优化 ---
+target_compile_options(pgmmv_classes PRIVATE -UUSE_PRELOAD_TEX)
+# 实验：预创建线程池，避免主线程创建线程后阻塞导致死锁
+target_link_options(pgmmv PRIVATE -sPTHREAD_POOL_SIZE=40 -sPTHREAD_POOL_SIZE_STRICT=2)

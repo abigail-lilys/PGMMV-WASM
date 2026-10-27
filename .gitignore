@@ -1,3 +1,24 @@
 build/
 *.log
 prebuilt/
+
+# 测试游戏资源（37M + 备份，绝不进 git）
+test_game/
+
+# 所有 .bak 备份（补丁脚本、解密脚本产生的）
+*.bak
+*.bak_*
+*.bak.*
+*.before-decrypt*
+*.before-pd-diag*
+
+# 同步 XHR 日志
+page_log*.txt
+
+# Python 虚拟环境与缓存
+.venv-*/
+__pycache__/
+*.pyc
+
+# CMake 备份
+CMakeLists.txt.bak*
