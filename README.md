@@ -1,48 +1,43 @@
-# Pixel Game Maker MV Player Open Source Edition
-日本語のREADMEは[こちら](README_JP.md)です。
+# PGMMV Player - WebAssembly 引擎源码 (Main 分支)
 
-## Introduction
+本分支包含移植到 WebAssembly 的 PGMMV 引擎与业务层核心源码（基于 cocos2d-x 3.17 + 旧版 SpiderMonkey）。
 
-"Pixel Game Maker MV Player Open Source Edition" is an open source version of the player application need to run games and software made with "Pixel Game Maker MV" (PGMMV) for Windows.
+> 构建配置、CMakeLists、解密脚本及虚拟键盘请查看 `master` 分支。
 
-## What is this project?
+## 🚀 分阶段移植与避坑指南
 
-This project is a project aimed at improving the PGMMV player application with support from the community and game creators.
-Improvements developed by this project will be distributed to all PGMMV users by Gotcha Gotcha Games.
-The current version of the player used for this project is 1.0.6.5, which does not reflect the fixes made in 1.0.6.6 or later.
+### 阶段一：JS 引擎与平台层编译
+- **关键点**：SpiderMonkey 34 交叉编译为 wasm32，关闭 JIT；新增 `CC_PLATFORM_EMSCRIPTEN` 平台层。
+- **易错点**：
+  - 现代浏览器必须开启跨源隔离 (COOP/COEP) 才能使用 `SharedArrayBuffer` 支持 pthread。
+  - 必须开启 `-sFULL_ES2=1`，否则 WebGL1 下客户端数组会导致所有 `drawArrays` 报错。
+  - 顶点与片段着色器必须统一 `highp` 精度，否则公共 uniform 会导致所有着色器链接失败（黑屏）。
 
-## How to join
+### 阶段二：业务代码兼容性适配
+- **关键点**：使用 `-fdelayed-template-parsing` 和 `-fms-extensions` 兼容 MSVC 语法，提供 `msvc_compat.h`。
+- **易错点**：
+  - `Slope.h:59` 中非 const 左值引用绑定临时对象会导致 clang 报错，需改为 `const Vec2&`。
+  - Windows 特有宏 `ARRAYSIZE`、`__declspec` 等需在 shim 头文件中补齐。
+  - 注意 `#if 0` 包裹的代码在编译时会被剔除，调试时极易误判。
 
-- This project uses English as the main language, though Japanese is also allowed.
-- This project follows Github Flow rules. Please prepare a new branch for any Pull Requests (PR). Once the PR is approved it must be merged to master branch. http://scottchacon.com/2011/08/31/github-flow.html
-- This project requires use of "Visual Studio 2022 Community" with C++ components.
-- The version of "cocos2d-x" used by this project is 3.17.1.
-- Project discussions will be carried out on the official Pixel Game Maker MV Discord channel: https://discord.com/invite/FtRVRkx5tP
+### 阶段三：运行时稳定性与多线程
+- **关键点**：扩容 Worker 池至 40；修复 `AudioEngine` 悬空指针；桩掉 `JavascriptManager::forceGC()`；增加 `getrusage` 桩。
+- **易错点**：
+  - 场景切换时 `SceneLayer` 并发极高，24 个 Worker 容易耗尽导致死锁。
+  - 音频实例销毁后，`std::map::operator[]` 会误插入空指针，必须在所有相关函数中判空。
+  - 缺少 JS 绑定时，SpiderMonkey 的强制 GC 会因遍历缺失对象而越界崩溃。
 
-## Roadmap
+### 阶段四：JS 绑定与输入
+- **关键点**：恢复最小化 JS 绑定（`register_all_cocos2dx` 等）；注入前端虚拟键盘。
+- **易错点**：
+  - 在 C++ 中注册全套 JS 绑定会导致链接缺少大量 UI/3D 符号，应仅保留核心模块。
+  - 虚拟键盘派发的 `KeyboardEvent` 中，`keyCode` 是只读的，必须用 `Object.defineProperty` 覆写。
 
-Initially this project aims to fix outstanding bugs.
-Contributors are allowed to create a customized version of the player that improves performance for their game, but for the time being only bug fix PRs will be accepted.
-Contributors will have their names added to the "Pixel Game Maker MV" developer credits
+## 🛠️ 编译说明
+```bash
+# 需先在 master 分支配置好环境
+mkdir build && cd build
+emcmake cmake ..
+emmake make pgmmv_classes -j3
+emmake make pgmmv -j3
 
-## How to build
-
-Please review the included readme: [readme_e.txt](/Installer/readme_e.txt)
-
-## How to use cutomized version of the player
-
-From November 21, 2023, it will be possible to use a customized Player component via the “1.0.6-Osplayer-beta” branch on Steam.
-After enabling this branch, you will have the option to specify versions to use for the Player, Runtime, and Debugging Runtime components.
-
-### Player: This is the version of the Player component used when performing a test play via the PGMMV editor.
-The default version is the normal Player component installed with PGMMV’s editor at (install folder)/player-win/player.exe.
-### Runtime: This is the version of the Player component packaged with a game during the build process, and thus is the version people who play your game will use.
-The default version is the one included with a PGMMV install: (install folder)/resource/runtime.zip
-### Debugging Runtime: A version of the Runtime used when a game is built with the debug flag enabled.
-The default version is the one included with a PGMMV install: (install folder)/resource/debugMenuRuntime.zip
-
-
-## License
-
-This content is released under the MIT License.
-[LICENSE](LICENSE)
