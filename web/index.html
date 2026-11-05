@@ -1,0 +1,964 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="color-scheme" content="dark">
+<title>PGMMV</title>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin:0; width:100%; height:100%; background:#000; color:#f4f7fb; font:16px/1.5 system-ui,sans-serif; overflow:hidden; }
+canvas { display:block; width:100vw; height:100vh; outline:none; background:#000; }
+#boot { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:16px; background:rgba(0,0,0,.96); z-index:50; text-align:left; }
+#boot-card { width:min(760px,96vw); max-height:94vh; overflow:auto; padding:clamp(18px,4vw,30px); color:#f4f7fb; background:#101820; border:1px solid #536777; border-radius:16px; box-shadow:0 16px 60px #000; }
+#heading { margin:0 0 4px; font-size:clamp(22px,4.5vw,32px); font-weight:800; letter-spacing:.02em; color:#fff; }
+#subtitle { margin:0 0 22px; color:#b8c7d4; font-size:14px; }
+#stage { display:inline-block; padding:5px 10px; margin-bottom:12px; border-radius:7px; background:#183e37; color:#8ff5cc; font-weight:700; }
+#msg { margin:0 0 18px; color:#fff !important; font-size:clamp(18px,3.5vw,24px); line-height:1.45; font-weight:700; white-space:pre-wrap; overflow-wrap:anywhere; }
+#msg.err { color:#ff9a9a !important; }
+.progress-block { margin:15px 0; }
+.progress-head { display:flex; justify-content:space-between; align-items:baseline; gap:12px; margin-bottom:7px; color:#eaf0f6; font-size:14px; }
+.progress-head strong { color:#fff; font-size:15px; font-variant-numeric:tabular-nums; }
+.bar { width:100%; height:14px; overflow:hidden; border-radius:99px; background:#303b46; border:1px solid #4b5a68; }
+.fill { width:0; height:100%; border-radius:99px; transition:width .12s linear; }
+#file-fill { background:#38e5a1; }
+#byte-fill { background:#65b8ff; }
+#hint { margin-top:18px; color:#b8c7d4; font-size:13px; }
+#diag-btn { position:fixed; left:12px; bottom:12px; z-index:80; border:1px solid #718495; border-radius:10px; padding:9px 13px; background:rgba(12,22,31,.94); color:#fff; font-size:14px; font-weight:700; box-shadow:0 2px 12px #0008; opacity:.82; }
+#log-panel { display:none; position:fixed; z-index:90; left:10px; right:10px; bottom:60px; max-height:65vh; padding:12px; background:#0c1218; border:1px solid #617789; border-radius:12px; box-shadow:0 8px 36px #000d; }
+#log-title { display:flex; align-items:center; justify-content:space-between; gap:8px; color:#fff; font-weight:800; margin-bottom:9px; }
+#log-actions { display:flex; gap:6px; flex-wrap:wrap; }
+#log-actions button { border:1px solid #536b7c; border-radius:7px; padding:7px 10px; background:#1d2a35; color:#fff; font-size:13px; }
+#log-text { display:block; width:100%; height:min(42vh,360px); resize:vertical; background:#020609; color:#bfffe4; border:1px solid #354957; border-radius:6px; padding:9px; font:12px/1.45 monospace; white-space:pre; }
+#log-note { color:#a9bac8; font-size:12px; margin-top:6px; }
+
+#diag-btn {
+    top: 12px;
+    bottom: auto;
+}
+
+/* PGMMV_TOUCH_CONTROLS_CSS_V2 */
+#pgmmv-controls {
+    /* PGMMV_CTRL_OPACITY_V1
+       新增 --pgmmv-blur，透明度低时自动取消模糊，防止遮挡文字 */
+    --pgmmv-blur: blur(4px);
+    --pgmmv-btn-bg: rgba(18,31,45,.396);
+    --pgmmv-btn-border: rgba(220,240,255,.288);
+    --pgmmv-btn-active-bg: rgba(35,145,125,.54);
+    --pgmmv-pad-bg: rgba(18,31,45,.18);
+    --pgmmv-pad-border: rgba(220,240,255,.24);
+    --pgmmv-pad-active-bg: rgba(35,145,125,.48);
+    --pgmmv-pad-active-border: rgba(210,255,235,.48);
+    --pgmmv-hold-bg: rgba(125,65,35,.456);
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 4;
+    align-items: flex-end;
+    justify-content: space-between;
+    padding: 0  max(12px, env(safe-area-inset-right, 0px))
+        max(16px, env(safe-area-inset-bottom, 0px))
+        max(12px, env(safe-area-inset-left, 0px));
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+body.pgmmv-touch-controls #pgmmv-controls {
+    display: flex;
+}
+#pgmmv-controls button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--pgmmv-btn-border);
+    background: var(--pgmmv-btn-bg);
+    color: #fff;
+    font: 800 clamp(12px,3vw,16px)/1 system-ui,sans-serif;
+    /* 降低文字阴影强度，避免字看不清 */
+    text-shadow: 0 1px 2px rgba(0,0,0,.6);
+    box-shadow: 0 3px 12px #0008;
+    backdrop-filter: var(--pgmmv-blur);
+    -webkit-backdrop-filter: var(--pgmmv-blur);
+    pointer-events: auto;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+#pgmmv-controls button.pgmmv-active {
+    background: var(--pgmmv-btn-active-bg);
+    border-color: #aaffdf;
+    transform: scale(.96);
+}
+#pgmmv-controls .pgmmv-pad {
+    display: grid;
+    grid-template-columns: repeat(3,clamp(48px,13vw,68px));
+    grid-template-rows: repeat(2,clamp(48px,13vw,68px));
+    grid-template-areas: ". up ." "left down right";
+    gap: clamp(4px,1.5vw,9px);
+}
+#pgmmv-controls .pgmmv-pad button {
+    width: 100%;
+    height: 100%;
+    border-radius: 17px;
+    font-size: clamp(17px,5vw,25px);
+}
+/* PGMMV_DPAD_LOW_OPACITY_FOR_FPS_V1 */
+#pgmmv-controls .pgmmv-pad button {
+    background: var(--pgmmv-pad-bg);
+    border-color: var(--pgmmv-pad-border);
+    box-shadow: 0 2px 7px rgba(0,0,0,.28);
+    backdrop-filter: var(--pgmmv-blur);
+    -webkit-backdrop-filter: var(--pgmmv-blur);
+}
+#pgmmv-controls .pgmmv-pad button.pgmmv-active {
+    background: var(--pgmmv-pad-active-bg);
+    border-color: var(--pgmmv-pad-active-border);
+}
+#pgmmv-controls .pgmmv-up { grid-area: up; }
+#pgmmv-controls .pgmmv-down { grid-area: down; }
+#pgmmv-controls .pgmmv-left { grid-area: left; }
+#pgmmv-controls .pgmmv-right { grid-area: right; }
+#pgmmv-controls .pgmmv-actions {
+    display: grid;
+    grid-template-columns: repeat(2,clamp(48px,13vw,68px));
+    grid-template-rows: repeat(2,clamp(48px,13vw,68px));
+    gap: clamp(5px,1.5vw,10px);
+}
+#pgmmv-controls .pgmmv-actions button {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+}
+#pgmmv-controls .pgmmv-hold {
+    background: var(--pgmmv-hold-bg);
+}
+#pgmmv-key-settings-toggle {
+    position: fixed;
+    top: max(10px,env(safe-area-inset-top,0px));
+    right: max(10px,env(safe-area-inset-right,0px));
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    font-size: 21px;
+}
+/* 设置入口固定为半透明 */
+#pgmmv-controls #pgmmv-key-settings-toggle {
+    background: rgba(18,31,45,.55);
+    border-color: rgba(220,240,255,.55);
+}
+#pgmmv-key-settings {
+    position: fixed;
+    top: max(58px,calc(env(safe-area-inset-top,0px) + 54px));
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(360px,92vw);
+    max-height: 70vh;
+    overflow: auto;
+    padding: 13px;
+    border: 1px solid #668092;
+    border-radius: 14px;
+    background: rgba(9,17,25,.97);
+    color: #fff;
+    box-shadow: 0 8px 30px #000c;
+    pointer-events: auto;
+    z-index: 8;
+}
+#pgmmv-key-settings[hidden] { display: none !important; }
+#pgmmv-key-settings .pgmmv-settings-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    font-weight: 800;
+}
+#pgmmv-key-settings .pgmmv-map-grid {
+    display: grid;
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    gap: 9px;
+}
+#pgmmv-key-settings label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: #bdcedb;
+}
+#pgmmv-key-settings select {
+    width: 100%;
+    min-width: 0;
+    min-height: 38px;
+    border: 1px solid #536b7c;
+    border-radius: 7px;
+    padding: 5px;
+    background: #1a2935;
+    color: #fff;
+    font-size: 14px;
+}
+#pgmmv-key-settings button {
+    border: 1px solid #536b7c;
+    border-radius: 8px;
+    min-height: 36px;
+    padding: 6px 12px;
+    background: #1d2a35;
+    color: #fff;
+}
+#pgmmv-key-settings .pgmmv-settings-note {
+    margin-top: 10px;
+    color: #aebdca;
+    font-size: 11px;
+}
+#pgmmv-key-settings .pgmmv-opacity-row {
+    display: grid;
+    grid-template-columns: auto minmax(0,1fr) auto;
+    align-items: center;
+    gap: 10px;
+    margin-top: 13px;
+    padding-top: 12px;
+    border-top: 1px solid #2c3d4a;
+    font-size: 12px;
+    color: #bdcedb;
+}
+#pgmmv-key-settings .pgmmv-opacity-row input[type="range"] {
+    width: 100%;
+    margin: 0;
+    accent-color: #38e5a1;
+    cursor: pointer;
+}
+#pgmmv-key-settings .pgmmv-opacity-row output {
+    min-width: 3.4em;
+    text-align: right;
+    color: #fff;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+#diag-btn { top: 12px; bottom: auto; }
+
+</style>
+</head>
+<body>
+<canvas id="canvas" tabindex="-1"></canvas>
+<div id="boot" role="status" aria-live="polite">
+  <div id="boot-card">
+    <h1 id="heading">PGMMV启动诊断</h1>
+    <p id="subtitle">显示资源读取进度；如启动失败，错误和调用栈会保留在诊断日志中。</p>
+    <div id="stage">正在准备</div>
+    <div id="msg">准备加载游戏数据…</div>
+    <div class="progress-block">
+      <div class="progress-head"><span>文件进度</span><strong id="file-label">0 / 0 个文件</strong></div>
+      <div class="bar"><div class="fill" id="file-fill"></div></div>
+    </div>
+    <div class="progress-block">
+      <div class="progress-head"><span>数据进度</span><strong id="byte-label">0.0 / 0.0 MB</strong></div>
+      <div class="bar"><div class="fill" id="byte-fill"></div></div>
+    </div>
+    <div id="hint">如果停在这里或出现异常，点击左下角「诊断日志」并复制内容。</div>
+  </div>
+</div>
+<button id="diag-btn" type="button">诊断日志</button>
+<div id="log-panel" role="region" aria-label="运行诊断日志">
+  <div id="log-title"><span>运行诊断日志</span><div id="log-actions">
+    <button id="copy-log" type="button">复制日志</button>
+    <button id="clear-log" type="button">清空</button>
+    <button id="close-log" type="button">关闭</button>
+  </div></div>
+  <textarea id="log-text" readonly spellcheck="false" aria-label="日志内容"></textarea>
+  <div id="log-note">日志在当前 WebView 可用时保存在本地；若系统剪贴板不允许访问，文本会自动选中，可手动复制。</div>
+</div>
+<script>
+(function () {
+  'use strict';
+  var Q = new URLSearchParams(location.search), debug = Q.has('debug');
+  var boot = document.getElementById('boot');
+  var msg = document.getElementById('msg');
+  var stageEl = document.getElementById('stage');
+  var fileLabel = document.getElementById('file-label');
+  var byteLabel = document.getElementById('byte-label');
+  var fileFill = document.getElementById('file-fill');
+  var byteFill = document.getElementById('byte-fill');
+  var logPanel = document.getElementById('log-panel');
+  var logText = document.getElementById('log-text');
+  var diagBtn = document.getElementById('diag-btn');
+  var logLines = [];
+  var LOG_KEY = 'pgmmv_joi_diag_log_v1';
+  var rawConsole = {};
+  ['log','info','warn','error','debug'].forEach(function (k) {
+    try { rawConsole[k] = console[k] ? console[k].bind(console) : function () {}; }
+    catch (_) { rawConsole[k] = function () {}; }
+  });
+
+  // PGMMV_CLEAR_DIAGNOSTIC_LOG_EACH_RUN_V1: each page launch starts with a clean log.
+  try { localStorage.removeItem(LOG_KEY); } catch (_) {}
+
+  function now() { return new Date().toISOString(); }
+  function toText(v) {
+    if (v instanceof Error) return v.stack || (v.name + ': ' + v.message);
+    if (typeof v === 'string') return v;
+    try { var j = JSON.stringify(v); return j === undefined ? String(v) : j; }
+    catch (_) { try { return String(v); } catch (__) { return '[无法转换的日志对象]'; } }
+  }
+  function flushLog() {
+    if (logText) {
+      logText.value = logLines.join('\n');
+      if (logPanel.style.display !== 'none') logText.scrollTop = logText.scrollHeight;
+    }
+    try { localStorage.setItem(LOG_KEY, logLines.join('\n')); } catch (_) {}
+  }
+  function record(level, value) {
+    var line = '[' + now() + '] [' + level + '] ' + toText(value);
+    logLines.push(line);
+    while (logLines.length > 5000) logLines.shift();
+    var chars = 0;
+    for (var j = 0; j < logLines.length; j++) chars += logLines[j].length + 1;
+    while (chars > 1000000 && logLines.length > 1) chars -= logLines.shift().length + 1;
+    if (logLines.length % 4 === 0 || /ERROR|ABORT|FATAL/.test(level)) flushLog();
+    else if (logPanel.style.display !== 'none') {
+      logText.value = logLines.join('\n');
+      logText.scrollTop = logText.scrollHeight;
+    }
+  }
+  function setStage(s) { stageEl.textContent = s; record('STAGE', s); }
+  function showLogs(open) {
+    logPanel.style.display = open ? 'block' : 'none';
+    if (open) flushLog();
+  }
+  function fail(t) {
+    var text = toText(t || '未知错误');
+    msg.className = 'err';
+    msg.textContent = text;
+    stageEl.textContent = '启动失败';
+    boot.style.display = 'flex';
+    record('FATAL', text);
+    showLogs(true);
+  }
+  function mb(n) { return ((Number(n) || 0) / 1048576).toFixed(1) + ' MB'; }
+  function pct(n, total) {
+    n = Number(n) || 0; total = Number(total) || 0;
+    return total > 0 ? Math.max(0, Math.min(100, 100 * n / total)) : 0;
+  }
+
+  document.getElementById('diag-btn').addEventListener('click', function () {
+    showLogs(logPanel.style.display === 'none');
+  });
+  document.getElementById('close-log').addEventListener('click', function () { showLogs(false); });
+  document.getElementById('clear-log').addEventListener('click', function () {
+    logLines = [];
+    record('INFO', '用户清空了日志');
+    flushLog();
+  });
+
+  // PGMMV_LOG_COPY_ONLY_V1
+  // 只复制到剪贴板，去掉服务器 POST 判定。
+  var logNote = document.getElementById('log-note');
+  var copyButton = document.getElementById('copy-log');
+
+  function copyFallback(data) {
+    logText.value = data;
+    logText.focus();
+    logText.select();
+    try { return !!document.execCommand('copy'); }
+    catch (_) { return false; }
+  }
+
+  function copyToClipboard(data) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(data).then(
+        function () { return true; },
+        function () { return copyFallback(data); }
+      );
+    }
+    return Promise.resolve(copyFallback(data));
+  }
+
+  copyButton.addEventListener('click', function () {
+    record('INFO', '点击复制：开始复制日志');
+    flushLog();
+
+    var data = logLines.join('\n') + '\n';
+    copyButton.disabled = true;
+    if (logNote) logNote.textContent = '正在复制…';
+
+    var clipboardTask = copyToClipboard(data).then(function (ok) {
+      record(ok ? 'INFO' : 'WARN',
+        ok ? '剪贴板复制成功' : '剪贴板复制失败，文本已尝试选中');
+      return ok;
+    }).catch(function (e) {
+      record('WARN', '剪贴板异常：' + toText(e));
+      return false;
+    });
+
+    clipboardTask.then(function (ok) {
+      if (logNote) {
+        logNote.textContent = ok ? '复制成功！' : '复制失败：请手动长按或右键点击文本框复制。';
+      }
+      flushLog();
+      copyButton.disabled = false;
+    });
+  });
+    // Capture console output without recursively calling the wrapped console.
+  ['log','info','warn','error','debug'].forEach(function (k) {
+    try {
+      console[k] = function () {
+        var text = Array.prototype.map.call(arguments, toText).join(' ');
+        record('console.' + k, text);
+        rawConsole[k].apply(null, arguments);
+      };
+    } catch (_) {}
+  });
+
+  window.addEventListener('error', function (ev) {
+    var text = 'message=' + (ev.message || '未知 JavaScript 错误') +
+      ' | source=' + (ev.filename || '') + ':' + (ev.lineno || 0) + ':' + (ev.colno || 0);
+    record('WINDOW_ERROR', text);
+    if (ev.error && ev.error.stack) record('STACK', ev.error.stack);
+    fail(text);
+  });
+  window.addEventListener('unhandledrejection', function (ev) {
+    record('UNHANDLED_REJECTION', ev.reason && ev.reason.stack ? ev.reason.stack : ev.reason);
+    fail('未处理的 Promise 异常：' + toText(ev.reason));
+  });
+
+  record('INFO', '========== 新运行会话 ==========');
+  record('INFO', 'URL=' + location.href);
+  record('INFO', 'userAgent=' + navigator.userAgent);
+  record('INFO', '启动页已载入；等待 Emscripten');
+
+  function start() {
+    var gu = 'Resources/';
+    if (!Q.has('game') && gu !== 'game/') {
+      Q.set('game', gu);
+      try { history.replaceState(null, '', '?' + Q); } catch (_) {}
+    }
+    setStage('加载运行时');
+    msg.className = '';
+    msg.textContent = '正在载入 PGMMV 运行时…';
+    window.Module = {
+      canvas: document.getElementById('canvas'),
+      print: function (t) { if (typeof t === 'string' && t.length > 500 && t.indexOf('plugins: ') === 0) return; /* PGMMV_FILTER_PLUGINS_V1 */ record('STDOUT', t); rawConsole.log(t); },
+      printErr: function (t) { record('STDERR', t); rawConsole.warn(t); },
+      preRun: [function () { setStage('Emscripten 初始化'); }],
+      pgmmv: {
+        onProgress: function (d, t, b, tb) {
+          // Lazy loading is not a full preload: these numbers count only new downloads.
+          fileLabel.textContent = '本次新下载 ' + (Number(d) || 0) + ' 个 / 清单 ' + (Number(t) || 0) + ' 个资源';
+          byteLabel.textContent = mb(b) + ' 本次下载 / ' + mb(tb) + ' 清单总量';
+          fileFill.style.width = pct(d, t) + '%';
+          byteFill.style.width = pct(b, tb) + '%';
+          stageEl.textContent = '运行中：按需读取资源';
+          msg.className = '';
+          msg.textContent = '游戏运行中；未命中缓存的资源会在首次访问时加载。';
+        },
+        onError: fail,
+        // PGMMV_STAGE_TRACE_V1: visible in the local HTTP server access log.
+        trace: function (stage) {
+          try {
+            var u = new URL('/__pgmmv_stage', location.href);
+            u.searchParams.set('stage', String(stage));
+            u.searchParams.set('t', String(Date.now()));
+            var x = new XMLHttpRequest();
+            x.open('GET', u.href, false);
+            x.send(null);
+          } catch (e) {
+            try { console.warn('[PGMMV_STAGE_TRACE] ' + stage + ': ' + e); } catch (_) {}
+          }
+        }
+
+      },
+      onAbort: function (w) { record('ABORT', w); fail('Emscripten 中止：' + toText(w)); },
+      onRuntimeInitialized: function () {
+          // PGMMV_BOOT_OVERLAY_RELEASE_ON_RUNTIMEINIT_V1
+          // A browser game may install a persistent main loop, so don't wait for postRun.
+          record('INFO', 'WASM runtime initialized; revealing canvas before the persistent game loop');
+          setStage('WASM 实例初始化完成');
+          boot.style.display = 'none';
+          diagBtn.style.display = 'block';
+          flushLog();
+        },
+      postRun: [function () {
+        record('INFO', 'Emscripten postRun 已执行');
+        setStage('运行时已启动');
+        boot.style.display = 'none';
+        diagBtn.style.display = 'block';
+        flushLog();
+      }]
+    };
+
+    // PGMMV_MANIFEST_BODY_PROBE_V1
+    // 直接读取 manifest 404 的响应正文，区分文件记录缺失和 SAF 读取失败。
+    try {
+      var manifestProbeUrl = new URL('Resources/manifest.json', location.href);
+      
+
+      fetch(manifestProbeUrl.href, {
+        method: 'GET',
+        cache: 'no-store',
+        credentials: 'same-origin'
+      }).then(function (response) {
+        return response.text().then(function (body) {
+          
+          flushLog();
+        });
+      }).catch(function (error) {
+        
+        flushLog();
+      });
+    } catch (error) {
+      
+      flushLog();
+    }
+
+    var s = document.createElement('script');
+    s.src = 'runtime/pgmmv.js';
+    s.onerror = function () { fail('找不到或无法加载 runtime/pgmmv.js'); };
+    record('INFO', '加载脚本：' + s.src);
+    document.body.appendChild(s);
+    if (debug) showLogs(true);
+  }
+  start();
+})();
+</script>
+
+<!-- PGMMV_TOUCH_CONTROLS_HTML_V2 -->
+<div id="pgmmv-controls" aria-label="PGMMV 触控键盘">
+  <button id="pgmmv-key-settings-toggle"
+          type="button" aria-label="按键设置"
+          aria-expanded="false">⚙</button>
+
+  <section id="pgmmv-key-settings" hidden
+           aria-label="触控按键映射设置">
+    <div class="pgmmv-settings-head">
+      <span>屏幕按键设置</span>
+      <button id="pgmmv-key-settings-close" type="button">完成</button>
+    </div>
+    <div class="pgmmv-map-grid">
+      <label>方向：上
+        <select data-pgmmv-setting="up"></select>
+      </label>
+      <label>方向：下
+        <select data-pgmmv-setting="down"></select>
+      </label>
+      <label>方向：左
+        <select data-pgmmv-setting="left"></select>
+      </label>
+      <label>方向：右
+        <select data-pgmmv-setting="right"></select>
+      </label>
+      <label>功能键 1
+        <select data-pgmmv-setting="key1"></select>
+      </label>
+      <label>功能键 2
+        <select data-pgmmv-setting="key2"></select>
+      </label>
+      <label>功能键 3
+        <select data-pgmmv-setting="key3"></select>
+      </label>
+    </div>
+
+    <!-- 新增：按键透明度滑杆 -->
+    <div class="pgmmv-opacity-row">
+      <label for="pgmmv-opacity-range">按键透明度</label>
+      <input id="pgmmv-opacity-range" type="range"
+             min="10" max="100" step="5" value="60">
+      <output id="pgmmv-opacity-value">60%</output>
+    </div>
+
+    <div class="pgmmv-settings-note">
+      修改后立即生效并自动保存。透明度越低越不挡游戏画面，100% 为完全不透明；
+      HOLD 固定为鼠标右键。
+    </div>
+  </section>
+
+  <div class="pgmmv-pad" aria-label="方向键">
+    <button type="button" class="pgmmv-up"
+            data-pgmmv-slot="up">↑</button>
+    <button type="button" class="pgmmv-left"
+            data-pgmmv-slot="left">←</button>
+    <button type="button" class="pgmmv-down"
+            data-pgmmv-slot="down">↓</button>
+    <button type="button" class="pgmmv-right"
+            data-pgmmv-slot="right">→</button>
+  </div>
+
+  <div class="pgmmv-actions" aria-label="功能键">
+    <button type="button" data-pgmmv-slot="key1">Z</button>
+    <button type="button" data-pgmmv-slot="key2">X</button>
+    <button type="button" data-pgmmv-slot="key3">SHIFT</button>
+    <button type="button" class="pgmmv-hold"
+            data-pgmmv-mouse="2">HOLD</button>
+  </div>
+</div>
+
+<script>
+(function () {
+    'use strict';
+    // PGMMV_TOUCH_CONTROLS_JS_V2
+    var root = document.getElementById('pgmmv-controls');
+    var canvas = document.getElementById('canvas');
+    if (!root || !canvas) return;
+
+    var STORAGE_KEY = 'pgmmv_touch_keymap_v2';
+    var keyOptions = [];
+    var keyByCode = Object.create(null);
+    function addKey(code, label, key, domCode, location) {
+        var item = { code: code, label: label, key: key, domCode: domCode, location: location || 0 };
+        keyOptions.push(item);
+        keyByCode[code] = item;
+    }
+
+    for (var c = 65; c <= 90; c++) {
+        var letter = String.fromCharCode(c);
+        addKey(c, letter, letter.toLowerCase(), 'Key' + letter);
+    }
+    for (var d = 0; d <= 9; d++) {
+        addKey(48 + d, String(d), String(d), 'Digit' + d);
+    }
+    addKey(32, 'Space', ' ', 'Space');
+    addKey(16, 'Shift', 'Shift', 'ShiftLeft', 1);
+    addKey(17, 'Ctrl', 'Control', 'ControlLeft', 1);
+    addKey(18, 'Alt', 'Alt', 'AltLeft', 1);
+    addKey(13, 'Enter', 'Enter', 'Enter');
+    addKey(27, 'Esc', 'Escape', 'Escape');
+    addKey(9, 'Tab', 'Tab', 'Tab');
+    addKey(8, 'Backspace', 'Backspace', 'Backspace');
+    addKey(37, '←', 'ArrowLeft', 'ArrowLeft');
+    addKey(38, '↑', 'ArrowUp', 'ArrowUp');
+    addKey(39, '→', 'ArrowRight', 'ArrowRight');
+    addKey(40, '↓', 'ArrowDown', 'ArrowDown');
+    for (var f = 1; f <= 12; f++) {
+        addKey(111 + f, 'F' + f, 'F' + f, 'F' + f);
+    }
+
+    var keyMap = { up: 38, down: 40, left: 37, right: 39, key1: 90, key2: 88, key3: 16 };
+
+    /* ---------- 按键透明度（修改为允许 0%） ---------- */
+    var OPACITY_KEY = 'pgmmv_touch_opacity_v1';
+    var OPACITY_DEFAULT = 0.6;
+    var OPACITY_MIN = 0;   // 允许完全透明
+    var OPACITY_MAX = 1;
+
+    var opacityRange = document.getElementById('pgmmv-opacity-range');
+    var opacityOutput = document.getElementById('pgmmv-opacity-value');
+
+    function clampOpacity(v) {
+        v = Number(v);
+        if (!isFinite(v)) return OPACITY_DEFAULT;
+        return Math.min(OPACITY_MAX, Math.max(OPACITY_MIN, v));
+    }
+
+    function rgba(r, g, b, a) {
+        return 'rgba(' + r + ',' + g + ',' + b + ',' + (Math.round(a * 1000) / 1000) + ')';
+    }
+
+    function applyOpacity(value, persist) {
+        var a = clampOpacity(value);
+        var s = root.style;
+        s.setProperty('--pgmmv-btn-bg', rgba(18, 31, 45, 0.66 * a));
+        s.setProperty('--pgmmv-btn-border', rgba(220, 240, 255, 0.48 * a));
+        s.setProperty('--pgmmv-btn-active-bg', rgba(35, 145, 125, 0.90 * a));
+        s.setProperty('--pgmmv-pad-bg', rgba(18, 31, 45, 0.30 * a));
+        s.setProperty('--pgmmv-pad-border', rgba(220, 240, 255, 0.40 * a));
+        s.setProperty('--pgmmv-pad-active-bg', rgba(35, 145, 125, 0.80 * a));
+        s.setProperty('--pgmmv-pad-active-border', rgba(210, 255, 235, 0.80 * a));
+        s.setProperty('--pgmmv-hold-bg', rgba(125, 65, 35, 0.76 * a));
+
+        // 核心修改：透明度低于 20% 时，彻底取消背景模糊，保证底层文字清晰
+        if (a < 0.2) {
+            s.setProperty('--pgmmv-blur', 'none');
+        } else {
+            s.setProperty('--pgmmv-blur', 'blur(4px)');
+        }
+
+        if (opacityOutput) opacityOutput.textContent = Math.round(a * 100) + '%';
+        if (opacityRange) opacityRange.value = String(Math.round(a * 100));
+        if (persist) {
+            try { localStorage.setItem(OPACITY_KEY, String(a)); } catch (_) {}
+        }
+    }
+
+    if (opacityRange) {
+        opacityRange.addEventListener('input', function () {
+            applyOpacity(Number(opacityRange.value) / 100, true);
+        });
+    }
+
+    var initialOpacity = OPACITY_DEFAULT;
+    try {
+        var storedOpacity = localStorage.getItem(OPACITY_KEY);
+        if (storedOpacity !== null) initialOpacity = clampOpacity(storedOpacity);
+    } catch (_) {}
+    applyOpacity(initialOpacity, false);
+    /* ---------- 透明度逻辑结束 ---------- */
+
+    try {
+        var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+        Object.keys(keyMap).forEach(function (slot) {
+            var code = Number(saved[slot]);
+            if (keyByCode[code]) keyMap[slot] = code;
+        });
+    } catch (_) {}
+    
+    var activePointers = Object.create(null);
+    var keyRefs = Object.create(null);
+    var mouseRefs = Object.create(null);
+
+    function setEventValue(event, name, value) {
+        try {
+            Object.defineProperty(event, name, {
+                configurable: true,
+                get: function () { return value; }
+            });
+        } catch (_) {
+            try { event[name] = value; } catch (__) {}
+        }
+    }
+
+    function dispatchKey(code, down) {
+        var info = keyByCode[code];
+        if (!info) return;
+
+        var event = document.createEvent('Events');
+        event.initEvent(down ? 'keydown' : 'keyup', true, true);
+
+        setEventValue(event, 'keyCode', code);
+        setEventValue(event, 'which', code);
+        setEventValue(event, 'key', info.key);
+        setEventValue(event, 'code', info.domCode);
+        setEventValue(event, 'location', info.location);
+        event.__pgmmvVirtualKey = true;
+
+        canvas.dispatchEvent(event);
+    }
+
+    function acquireKey(code) {
+        var count = keyRefs[code] || 0;
+        keyRefs[code] = count + 1;
+        if (count === 0) dispatchKey(code, true);
+    }
+
+    function releaseKey(code) {
+        var count = keyRefs[code] || 0;
+        if (count <= 1) {
+            delete keyRefs[code];
+            if (count) dispatchKey(code, false);
+        } else {
+            keyRefs[code] = count - 1;
+        }
+    }
+    function dispatchMouse(button, down) {
+        var rect = canvas.getBoundingClientRect();
+        var event = new MouseEvent(
+            down ? 'mousedown' : 'mouseup',
+            {
+                bubbles: true,
+                cancelable: true,
+                view: window,
+                button: button,
+                buttons: down ? (1 << button) : 0,
+                clientX: rect.left + rect.width / 2,
+                clientY: rect.top + rect.height / 2
+            }
+        );
+        event.__pgmmvVirtualMouse = true;
+        canvas.dispatchEvent(event);
+    }
+
+    function acquireMouse(button) {
+        var count = mouseRefs[button] || 0;
+        mouseRefs[button] = count + 1;
+        if (count === 0) dispatchMouse(button, true);
+    }
+
+    function releaseMouse(button) {
+        var count = mouseRefs[button] || 0;
+        if (count <= 1) {
+            delete mouseRefs[button];
+            if (count) dispatchMouse(button, false);
+        } else {
+            mouseRefs[button] = count - 1;
+        }
+    }
+
+    function releasePointer(id) {
+        var item = activePointers[id];
+        if (!item) return;
+
+        delete activePointers[id];
+
+        if (item.key !== undefined) releaseKey(item.key);
+        if (item.mouse !== undefined) releaseMouse(item.mouse);
+
+        var stillPressed = Object.keys(activePointers).some(
+            function (otherId) {
+                return activePointers[otherId].element === item.element;
+            }
+        );
+
+        if (!stillPressed)
+            item.element.classList.remove('pgmmv-active');
+    }
+
+    function releaseAll() {
+        Object.keys(activePointers).forEach(releasePointer);
+    }
+
+    root.addEventListener('pointerdown', function (event) {
+        var button = event.target.closest(
+            'button[data-pgmmv-slot],button[data-pgmmv-mouse]'
+        );
+
+        if (!button || !root.contains(button)) return;
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+
+        event.preventDefault();
+
+        var id = String(event.pointerId);
+        if (activePointers[id]) return;
+
+        var item = { element: button };
+
+        if (button.hasAttribute('data-pgmmv-slot')) {
+            var slot = button.getAttribute('data-pgmmv-slot');
+            item.key = keyMap[slot];
+            if (!keyByCode[item.key]) return;
+            acquireKey(item.key);
+        } else {
+            item.mouse = Number(button.getAttribute('data-pgmmv-mouse'));
+            if (item.mouse !== 2) return;
+            acquireMouse(item.mouse);
+        }
+
+        activePointers[id] = item;
+        button.classList.add('pgmmv-active');
+
+        try { button.setPointerCapture(event.pointerId); } catch (_) {}
+    }, { passive: false });
+
+    function finishPointer(event) {
+        releasePointer(String(event.pointerId));
+    }
+
+    root.addEventListener('pointerup', finishPointer);
+    root.addEventListener('pointercancel', finishPointer);
+    root.addEventListener('lostpointercapture', finishPointer);
+
+    window.addEventListener('blur', releaseAll);
+    window.addEventListener('pagehide', releaseAll);
+
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden) releaseAll();
+    });
+
+    window.addEventListener('beforeunload', releaseAll);
+    var settingsPanel = document.getElementById('pgmmv-key-settings');
+    var settingsToggle = document.getElementById('pgmmv-key-settings-toggle');
+    var settingsClose = document.getElementById('pgmmv-key-settings-close');
+
+    function renderKeyButtons() {
+        root.querySelectorAll('button[data-pgmmv-slot]').forEach(
+            function (button) {
+                var slot = button.getAttribute('data-pgmmv-slot');
+                var info = keyByCode[keyMap[slot]];
+                if (info) button.textContent = info.label;
+            }
+        );
+    }
+
+    function populateSettings() {
+        root.querySelectorAll('select[data-pgmmv-setting]').forEach(
+            function (select) {
+                var slot = select.getAttribute('data-pgmmv-setting');
+
+                keyOptions.forEach(function (item) {
+                    var option = document.createElement('option');
+                    option.value = String(item.code);
+                    option.textContent = item.label;
+                    select.appendChild(option);
+                });
+
+                select.value = String(keyMap[slot]);
+            }
+        );
+    }
+
+    function saveKeyMap() {
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(keyMap));
+        } catch (e) {
+            console.warn('[PGMMV-INPUT] key map save failed:', e);
+        }
+    }
+
+    function showSettings(show) {
+        settingsPanel.hidden = !show;
+        settingsToggle.setAttribute('aria-expanded', show ? 'true' : 'false');
+    }
+
+    settingsToggle.addEventListener('click', function (event) {
+        event.preventDefault();
+        showSettings(settingsPanel.hidden);
+    });
+
+    settingsClose.addEventListener('click', function (event) {
+        event.preventDefault();
+        showSettings(false);
+    });
+
+    root.addEventListener('change', function (event) {
+        var select = event.target.closest('select[data-pgmmv-setting]');
+        if (!select) return;
+
+        var slot = select.getAttribute('data-pgmmv-setting');
+        var code = Number(select.value);
+        if (!(slot in keyMap) || !keyByCode[code]) return;
+
+        keyMap[slot] = code;
+        saveKeyMap();
+        renderKeyButtons();
+
+        console.log(
+            '[PGMMV-INPUT] mapped ' + slot + ' -> ' +
+            keyByCode[code].label + ' (' + code + ')'
+        );
+    });
+
+    function protectBrowserKey(event) {
+        // Let native select controls use arrows and Enter normally.
+        if (event.target && event.target.closest &&
+            event.target.closest('select,input,textarea')) return;
+
+        var code = event.keyCode || event.which;
+        if (keyByCode[code] && event.cancelable)
+            event.preventDefault();
+    }
+
+    window.addEventListener('keydown', protectBrowserKey, true);
+    window.addEventListener('keyup', protectBrowserKey, true);
+
+    document.addEventListener('contextmenu', function (event) {
+        if (root.contains(event.target) || event.target === canvas)
+            event.preventDefault();
+    });
+
+    populateSettings();
+    renderKeyButtons();
+
+    var hasTouch =
+        (navigator.maxTouchPoints || 0) > 0 ||
+        ('ontouchstart' in window);
+
+    if (hasTouch) {
+        document.body.classList.add('pgmmv-touch-controls');
+    }
+
+    console.log(
+        '[PGMMV-INPUT] controls ready; map=' +
+        JSON.stringify(keyMap)
+    );
+})();
+</script>
+
+</body>
+</html>
