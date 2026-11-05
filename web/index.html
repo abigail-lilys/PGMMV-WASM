@@ -136,6 +136,41 @@ body.pgmmv-touch-controls #pgmmv-controls {
 #pgmmv-controls .pgmmv-hold {
     background: var(--pgmmv-hold-bg);
 }
+
+/* 锁定类按钮：开启后保持高亮，直到再次点击或页面失焦 */
+#pgmmv-controls button[data-pgmmv-toggle-mouse].pgmmv-active,
+#pgmmv-controls button[data-pgmmv-dpad-latch].pgmmv-active {
+    background: var(--pgmmv-btn-active-bg);
+    border-color: #aaffdf;
+    box-shadow: 0 0 0 2px rgba(170,255,223,.18), 0 3px 12px #0008;
+}
+#pgmmv-controls .pgmmv-dpad-latch {
+    position: fixed;
+    top: max(10px,env(safe-area-inset-top,0px));
+    left: 50%;
+    width: 76px;
+    height: 42px;
+    border-radius: 12px;
+    transform: translateX(-50%);
+    background: rgba(18,31,45,.62);
+    border-color: rgba(220,240,255,.5);
+    z-index: 6;
+}
+#pgmmv-controls .pgmmv-dpad-latch.pgmmv-active {
+    transform: translateX(-50%) scale(.96);
+}
+#pgmmv-controls.pgmmv-position-editing button[data-pgmmv-slot],
+#pgmmv-controls.pgmmv-position-editing button[data-pgmmv-toggle-mouse],
+#pgmmv-controls.pgmmv-position-editing button[data-pgmmv-dpad-latch] {
+    outline: 2px dashed rgba(255,220,120,.9);
+    outline-offset: 2px;
+    cursor: move;
+}
+#pgmmv-controls .pgmmv-position-dragging {
+    z-index: 9 !important;
+    outline: 2px solid #ffe082 !important;
+    box-shadow: 0 0 0 4px rgba(255,224,130,.2), 0 5px 18px #000b !important;
+}
 #pgmmv-key-settings-toggle {
     position: fixed;
     top: max(10px,env(safe-area-inset-top,0px));
@@ -211,6 +246,29 @@ body.pgmmv-touch-controls #pgmmv-controls {
     color: #aebdca;
     font-size: 11px;
 }
+#pgmmv-key-settings .pgmmv-position-tools {
+    display: grid;
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #2c3d4a;
+}
+#pgmmv-key-settings .pgmmv-position-tools button {
+    min-width: 0;
+    min-height: 38px;
+}
+#pgmmv-key-settings #pgmmv-position-edit-toggle[aria-pressed="true"] {
+    background: #245746;
+    border-color: #8de8bd;
+}
+#pgmmv-key-settings .pgmmv-position-tools p {
+    grid-column: 1 / -1;
+    margin: 0;
+    color: #aebdca;
+    font-size: 11px;
+    line-height: 1.45;
+}
 #pgmmv-key-settings .pgmmv-opacity-row {
     display: grid;
     grid-template-columns: auto minmax(0,1fr) auto;
@@ -261,12 +319,13 @@ body.pgmmv-touch-controls #pgmmv-controls {
 <button id="diag-btn" type="button">诊断日志</button>
 <div id="log-panel" role="region" aria-label="运行诊断日志">
   <div id="log-title"><span>运行诊断日志</span><div id="log-actions">
-    <button id="copy-log" type="button">复制日志</button>
+    <button id="save-log" type="button">保存完整日志</button>
+    <button id="copy-log" type="button">复制精简日志</button>
     <button id="clear-log" type="button">清空</button>
     <button id="close-log" type="button">关闭</button>
   </div></div>
   <textarea id="log-text" readonly spellcheck="false" aria-label="日志内容"></textarea>
-  <div id="log-note">日志在当前 WebView 可用时保存在本地；若系统剪贴板不允许访问，文本会自动选中，可手动复制。</div>
+  <div id="log-note">完整日志通过 Android 系统文件选择器保存；剪贴板只复制精简诊断内容，避免超长截断。</div>
 </div>
 <script>
 (function () {
@@ -290,7 +349,6 @@ body.pgmmv-touch-controls #pgmmv-controls {
     catch (_) { rawConsole[k] = function () {}; }
   });
 
-  // PGMMV_CLEAR_DIAGNOSTIC_LOG_EACH_RUN_V1: each page launch starts with a clean log.
   try { localStorage.removeItem(LOG_KEY); } catch (_) {}
 
   function now() { return new Date().toISOString(); }
@@ -350,10 +408,35 @@ body.pgmmv-touch-controls #pgmmv-controls {
     flushLog();
   });
 
-  // PGMMV_LOG_COPY_ONLY_V1
-  // 只复制到剪贴板，去掉服务器 POST 判定。
+  // PGMMV_LOG_EXPORT_ANDROID_SAF_V2
+  // 完整日志优先使用 AetherPlay 原生 ACTION_CREATE_DOCUMENT；剪贴板只复制精简诊断。
   var logNote = document.getElementById('log-note');
+  var saveButton = document.getElementById('save-log');
   var copyButton = document.getElementById('copy-log');
+  var MAX_CLIPBOARD_CHARS = 16000;
+
+  // PGMMV_LOG_EXPORT_HOST_BRIDGE_V3
+  // Capacitor native calls must originate from the top-level AetherPlay page.
+  function getAetherPlayHostExporter() {
+    var hosts = [];
+    try {
+      if (window.top && window.top !== window) hosts.push(window.top);
+      if (window.parent && window.parent !== window && hosts.indexOf(window.parent) < 0) hosts.push(window.parent);
+    } catch (_) {}
+
+    for (var i = 0; i < hosts.length; i++) {
+      try {
+        var exporter = hosts[i].__AETHERPLAY_EXPORT_TEXT_FILE__;
+        if (typeof exporter === 'function') return exporter;
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  function makeLogFileName() {
+    var stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    return 'pgmmv-diagnostic-' + stamp + '.log';
+  }
 
   function copyFallback(data) {
     logText.value = data;
@@ -373,28 +456,195 @@ body.pgmmv-touch-controls #pgmmv-controls {
     return Promise.resolve(copyFallback(data));
   }
 
-  copyButton.addEventListener('click', function () {
-    record('INFO', '点击复制：开始复制日志');
+  function buildCompactLog() {
+    var total = logLines.length;
+    var chosen = Object.create(null);
+    var criticalPattern = /\[(?:ERROR|FATAL|ABORT|WINDOW_ERROR|UNHANDLED_REJECTION|STDERR|STACK|WARN)\]|console\.(?:error|warn)|(?:Exception|Error:|failed|失败|异常|中止)/i;
+
+    // 保留最近 60 行，另外保留较早的重要错误及其前后文。
+    for (var i = Math.max(0, total - 60); i < total; i++) chosen[i] = true;
+    var criticalCount = 0;
+    for (var j = total - 1; j >= 0 && criticalCount < 24; j--) {
+      if (!criticalPattern.test(logLines[j])) continue;
+      criticalCount++;
+      for (var k = Math.max(0, j - 2); k <= Math.min(total - 1, j + 2); k++) chosen[k] = true;
+    }
+
+    var indexes = Object.keys(chosen).map(Number).sort(function (a, b) { return a - b; });
+    var body = indexes.map(function (index) { return logLines[index]; });
+    var omitted = Math.max(0, total - indexes.length);
+    var header = [
+      '========== PGMMV 精简诊断日志 ==========',
+      '完整日志请使用「保存完整日志」导出。',
+      '原始日志：' + total + ' 行；本摘要最多 ' + MAX_CLIPBOARD_CHARS + ' 字符。',
+      omitted ? '已省略非关键日志：' + omitted + ' 行。' : '未省略日志行。',
+      ''
+    ].join('\n');
+
+    while (body.length && header.length + body.join('\n').length > MAX_CLIPBOARD_CHARS) {
+      body.shift();
+      omitted++;
+      header = [
+        '========== PGMMV 精简诊断日志 ==========',
+        '完整日志请使用「保存完整日志」导出。',
+        '原始日志：' + total + ' 行；本摘要最多 ' + MAX_CLIPBOARD_CHARS + ' 字符。',
+        '剪贴板省略日志：' + omitted + ' 行。',
+        ''
+      ].join('\n');
+    }
+
+    var result = header + body.join('\n');
+    if (result.length > MAX_CLIPBOARD_CHARS) result = result.slice(-MAX_CLIPBOARD_CHARS);
+    return result + '\n';
+  }
+
+  var nativeExportPending = null;
+
+  async function saveLogToFile(data) {
+    var fileName = makeLogFileName();
+    var expectedBytes = new Blob([data]).size;
+    var hostExporter = getAetherPlayHostExporter();
+
+    // Android 原生 SAF 文件选择器：由 AetherPlay 顶层 React 页面调用原生插件。
+    if (hostExporter) {
+      if (nativeExportPending) {
+        return { ok: false, method: 'pending' };
+      }
+
+      var exportOperation;
+      try {
+        exportOperation = Promise.resolve(hostExporter(fileName, data));
+      } catch (err) {
+        exportOperation = Promise.reject(err);
+      }
+      nativeExportPending = exportOperation;
+      exportOperation.then(
+        function () { if (nativeExportPending === exportOperation) nativeExportPending = null; },
+        function () { if (nativeExportPending === exportOperation) nativeExportPending = null; }
+      );
+
+      var timeoutId;
+      var timeoutOperation = new Promise(function (_resolve, reject) {
+        timeoutId = setTimeout(function () {
+          reject(new Error('等待 Android 文件选择器响应超过 25 秒。原生请求可能仍在系统层处理中；请先返回游戏，不要连续重复发起保存。'));
+        }, 25000);
+      });
+      try {
+        var savedUri = await Promise.race([exportOperation, timeoutOperation]);
+        if (typeof savedUri !== 'string' || !savedUri) {
+          throw new Error('Android 原生导出未返回有效文件 URI。');
+        }
+        return { ok: true, method: 'android-saf-host', uri: savedUri, bytesWritten: expectedBytes };
+      } catch (err) {
+        if (err && (err.code === 'CANCELLED' || /cancel/i.test(String(err.message || err)))) {
+          return { ok: false, method: 'cancel' };
+        }
+        throw err;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    record('WARN', 'AetherPlay 顶层日志导出桥不存在；尝试浏览器下载回退。');
+
+    // 非 Android 浏览器环境的备用路径。
+    if (window.showSaveFilePicker) {
+      try {
+        var handle = await window.showSaveFilePicker({
+          suggestedName: fileName,
+          types: [{ description: 'Log File', accept: { 'text/plain': ['.log', '.txt'] } }]
+        });
+        var writable = await handle.createWritable();
+        await writable.write(data);
+        await writable.close();
+        return { ok: true, method: 'picker' };
+      } catch (err) {
+        if (err && err.name === 'AbortError') return { ok: false, method: 'cancel' };
+        record('WARN', '浏览器保存面板不可用：' + toText(err));
+      }
+    }
+
+    try {
+      var blob = new Blob([data], { type: 'text/plain;charset=utf-8' });
+      var objectUrl = URL.createObjectURL(blob);
+      var anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = fileName;
+      anchor.style.display = 'none';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(function () { URL.revokeObjectURL(objectUrl); }, 30000);
+      return { ok: true, method: 'download' };
+    } catch (err) {
+      record('ERROR', '生成日志下载文件失败：' + toText(err));
+      return { ok: false, method: 'error', error: err };
+    }
+  }
+
+  saveButton.addEventListener('click', function () {
+    record('INFO', '用户请求保存完整诊断日志');
     flushLog();
+    var fullLog = logLines.join('\n') + '\n';
+    saveButton.disabled = true;
+    if (logNote) logNote.textContent = '正在通过 AetherPlay 顶层应用打开 Android 保存位置…';
 
-    var data = logLines.join('\n') + '\n';
-    copyButton.disabled = true;
-    if (logNote) logNote.textContent = '正在复制…';
-
-    var clipboardTask = copyToClipboard(data).then(function (ok) {
-      record(ok ? 'INFO' : 'WARN',
-        ok ? '剪贴板复制成功' : '剪贴板复制失败，文本已尝试选中');
-      return ok;
-    }).catch(function (e) {
-      record('WARN', '剪贴板异常：' + toText(e));
-      return false;
-    });
-
-    clipboardTask.then(function (ok) {
-      if (logNote) {
-        logNote.textContent = ok ? '复制成功！' : '复制失败：请手动长按或右键点击文本框复制。';
+    saveLogToFile(fullLog).then(function (res) {
+      if (res.ok) {
+        record('INFO', '完整日志保存成功：' + (res.bytesWritten || new Blob([fullLog]).size) + ' bytes；方式=' + res.method);
+        if (logNote) {
+          logNote.textContent = res.method === 'android-saf-host'
+            ? '已通过 Android 系统文件选择器保存并校验文件（' + res.bytesWritten + ' 字节）。'
+            : (res.method === 'picker' ? '已保存到选择的目录。' : '已触发浏览器下载，请检查 Download 文件夹。');
+        }
+      } else if (res.method === 'cancel') {
+        record('INFO', '用户取消了日志保存');
+        if (logNote) logNote.textContent = '已取消保存；完整日志仍保留在当前页面。';
+      } else if (res.method === 'pending') {
+        record('WARN', '上一笔 Android 保存请求仍未返回，已阻止重复打开。');
+        if (logNote) logNote.textContent = '上一笔系统保存请求仍在处理中，已阻止重复启动。请先返回游戏或重新打开游戏后再试。';
+      } else {
+        record('ERROR', '完整日志保存失败');
+        if (logNote) logNote.textContent = '保存失败：' + (res.error ? toText(res.error) : '未知原因');
       }
       flushLog();
+    }).catch(function (err) {
+      record('ERROR', '日志保存异常：' + toText(err));
+      if (logNote) logNote.textContent = '保存异常：' + toText(err);
+      flushLog();
+    }).finally(function () {
+      saveButton.disabled = false;
+    });
+  });
+
+  copyButton.addEventListener('click', function () {
+    record('INFO', '用户请求复制精简诊断日志');
+    var compact = buildCompactLog();
+    copyButton.disabled = true;
+    if (logNote) logNote.textContent = '正在复制精简日志（最多 ' + MAX_CLIPBOARD_CHARS + ' 字符）…';
+
+    copyToClipboard(compact).then(function (ok) {
+      record(ok ? 'INFO' : 'WARN', ok
+        ? '精简诊断日志已复制；完整日志请使用保存按钮导出'
+        : '剪贴板复制失败，精简日志已选中，可手动复制');
+      if (logNote) logNote.textContent = ok
+        ? '精简日志已复制；完整日志请点击「保存完整日志」。'
+        : '复制接口不可用，精简日志已选中，请长按文本框复制。';
+      if (ok) {
+        flushLog();
+      } else {
+        // 不要在失败时 flushLog()，否则会覆盖精简文本并清除选择状态。
+        logText.value = compact;
+        logText.focus();
+        logText.select();
+      }
+    }).catch(function (err) {
+      record('WARN', '剪贴板异常：' + toText(err));
+      if (logNote) logNote.textContent = '剪贴板异常，精简日志已选中，请长按文本框复制：' + toText(err);
+      logText.value = compact;
+      logText.focus();
+      logText.select();
+    }).finally(function () {
       copyButton.disabled = false;
     });
   });
@@ -437,7 +687,7 @@ body.pgmmv-touch-controls #pgmmv-controls {
     msg.textContent = '正在载入 PGMMV 运行时…';
     window.Module = {
       canvas: document.getElementById('canvas'),
-      print: function (t) { if (typeof t === 'string' && t.length > 500 && t.indexOf('plugins: ') === 0) return; /* PGMMV_FILTER_PLUGINS_V1 */ record('STDOUT', t); rawConsole.log(t); },
+      print: function (t) { /* PGMMV_FILTER_PLUGINS_V1 */ if (typeof t === 'string' && t.length > 500 && /plugins?/i.test(t)) { record('STDOUT_FILTERED', 'plugins table skipped (' + t.length + ' chars)'); return; } record('STDOUT', t); rawConsole.log(t); },
       printErr: function (t) { record('STDERR', t); rawConsole.warn(t); },
       preRun: [function () { setStage('Emscripten 初始化'); }],
       pgmmv: {
@@ -490,7 +740,7 @@ body.pgmmv-touch-controls #pgmmv-controls {
     // 直接读取 manifest 404 的响应正文，区分文件记录缺失和 SAF 读取失败。
     try {
       var manifestProbeUrl = new URL('Resources/manifest.json', location.href);
-      
+      manifestProbeUrl.searchParams.set('aetherplay_manifest_probe', String(Date.now()));
 
       fetch(manifestProbeUrl.href, {
         method: 'GET',
@@ -498,20 +748,26 @@ body.pgmmv-touch-controls #pgmmv-controls {
         credentials: 'same-origin'
       }).then(function (response) {
         return response.text().then(function (body) {
-          
+          record('MANIFEST_PROBE', {
+            url: response.url,
+            status: response.status,
+            ok: response.ok,
+            contentType: response.headers.get('content-type'),
+            bodyHead: body.slice(0, 500)
+          });
           flushLog();
         });
       }).catch(function (error) {
-        
+        record('MANIFEST_PROBE_ERROR', toText(error));
         flushLog();
       });
     } catch (error) {
-      
+      record('MANIFEST_PROBE_ERROR', toText(error));
       flushLog();
     }
 
     var s = document.createElement('script');
-    s.src = 'runtime/pgmmv.js';
+    s.src = 'runtime/pgmmv.js?pgmmv_probe=' + Date.now();
     s.onerror = function () { fail('找不到或无法加载 runtime/pgmmv.js'); };
     record('INFO', '加载脚本：' + s.src);
     document.body.appendChild(s);
@@ -557,6 +813,12 @@ body.pgmmv-touch-controls #pgmmv-controls {
       </label>
     </div>
 
+    <div class="pgmmv-position-tools">
+      <button id="pgmmv-position-edit-toggle" type="button" aria-pressed="false">调整按键位置</button>
+      <button id="pgmmv-position-reset" type="button">一键复原位置</button>
+      <p id="pgmmv-position-help">开启调整后，直接拖动屏幕上的方向键、功能键、HOLD 或锁向键；位置会自动保存。点击“完成位置调整”结束。</p>
+    </div>
+
     <!-- 新增：按键透明度滑杆 -->
     <div class="pgmmv-opacity-row">
       <label for="pgmmv-opacity-range">按键透明度</label>
@@ -566,10 +828,12 @@ body.pgmmv-touch-controls #pgmmv-controls {
     </div>
 
     <div class="pgmmv-settings-note">
-      修改后立即生效并自动保存。透明度越低越不挡游戏画面，100% 为完全不透明；
-      HOLD 固定为鼠标右键。
+      HOLD 点击切换鼠标右键；“锁向”位于屏幕上方，开启后点击方向键可锁定方向。可在此处调整所有按键的位置，支持一键复原。
     </div>
   </section>
+
+  <button type="button" class="pgmmv-dpad-latch"
+          data-pgmmv-dpad-latch aria-pressed="false">锁向</button>
 
   <div class="pgmmv-pad" aria-label="方向键">
     <button type="button" class="pgmmv-up"
@@ -587,14 +851,14 @@ body.pgmmv-touch-controls #pgmmv-controls {
     <button type="button" data-pgmmv-slot="key2">X</button>
     <button type="button" data-pgmmv-slot="key3">SHIFT</button>
     <button type="button" class="pgmmv-hold"
-            data-pgmmv-mouse="2">HOLD</button>
+            data-pgmmv-toggle-mouse="2" aria-pressed="false">HOLD</button>
   </div>
 </div>
 
 <script>
 (function () {
     'use strict';
-    // PGMMV_TOUCH_CONTROLS_JS_V2
+    // PGMMV_TOUCH_CONTROLS_JS_V4: top latch, original button layout, draggable positions
     var root = document.getElementById('pgmmv-controls');
     var canvas = document.getElementById('canvas');
     if (!root || !canvas) return;
@@ -704,6 +968,71 @@ body.pgmmv-touch-controls #pgmmv-controls {
     var keyRefs = Object.create(null);
     var mouseRefs = Object.create(null);
 
+    // HOLD：点击一次按下鼠标右键，再点击一次释放。
+    var holdMouseLatched = false;
+    var holdButton = root.querySelector('button[data-pgmmv-toggle-mouse]');
+
+    // 锁向模式：每个方向都可独立切换，并允许同时锁定多个方向（例如斜向）。
+    var dpadLatchMode = false;
+    var latchedDirections = Object.create(null);
+    var dpadLatchButton = root.querySelector('button[data-pgmmv-dpad-latch]');
+
+    function isDirectionSlot(slot) {
+        return slot === 'up' || slot === 'down' ||
+            slot === 'left' || slot === 'right';
+    }
+
+    function renderToggleButtons() {
+        if (holdButton) {
+            holdButton.classList.toggle('pgmmv-active', holdMouseLatched);
+            holdButton.setAttribute('aria-pressed', holdMouseLatched ? 'true' : 'false');
+        }
+        if (dpadLatchButton) {
+            dpadLatchButton.classList.toggle('pgmmv-active', dpadLatchMode);
+            dpadLatchButton.setAttribute('aria-pressed', dpadLatchMode ? 'true' : 'false');
+            dpadLatchButton.textContent = dpadLatchMode ? '锁向✓' : '锁向';
+        }
+    }
+
+    function clearLatchedDirection(slot) {
+        var item = latchedDirections[slot];
+        if (!item) return;
+        releaseKey(item.code);
+        if (item.button) item.button.classList.remove('pgmmv-active');
+        delete latchedDirections[slot];
+    }
+
+    function clearAllLatchedDirections() {
+        Object.keys(latchedDirections).forEach(clearLatchedDirection);
+    }
+
+    function setDpadLatchMode(enabled) {
+        dpadLatchMode = !!enabled;
+        if (!dpadLatchMode) clearAllLatchedDirections();
+        renderToggleButtons();
+    }
+
+    function toggleLatchedDirection(slot, code, button) {
+        if (latchedDirections[slot]) {
+            clearLatchedDirection(slot);
+            return;
+        }
+        latchedDirections[slot] = { code: code, button: button };
+        acquireKey(code);
+        button.classList.add('pgmmv-active');
+    }
+
+    function toggleHoldMouse() {
+        if (holdMouseLatched) {
+            releaseMouse(2);
+            holdMouseLatched = false;
+        } else {
+            acquireMouse(2);
+            holdMouseLatched = true;
+        }
+        renderToggleButtons();
+    }
+
     function setEventValue(event, name, value) {
         try {
             Object.defineProperty(event, name, {
@@ -802,11 +1131,20 @@ body.pgmmv-touch-controls #pgmmv-controls {
 
     function releaseAll() {
         Object.keys(activePointers).forEach(releasePointer);
+
+        // 页面失焦/切后台时统一释放锁定状态，避免虚拟按键卡住。
+        clearAllLatchedDirections();
+        if (holdMouseLatched) {
+            releaseMouse(2);
+            holdMouseLatched = false;
+        }
+        dpadLatchMode = false;
+        renderToggleButtons();
     }
 
     root.addEventListener('pointerdown', function (event) {
         var button = event.target.closest(
-            'button[data-pgmmv-slot],button[data-pgmmv-mouse]'
+            'button[data-pgmmv-slot],button[data-pgmmv-toggle-mouse],button[data-pgmmv-dpad-latch]'
         );
 
         if (!button || !root.contains(button)) return;
@@ -814,22 +1152,31 @@ body.pgmmv-touch-controls #pgmmv-controls {
 
         event.preventDefault();
 
+        // 两个模式键是“点击切换”，不随 pointerup 自动释放。
+        if (button.hasAttribute('data-pgmmv-toggle-mouse')) {
+            toggleHoldMouse();
+            return;
+        }
+        if (button.hasAttribute('data-pgmmv-dpad-latch')) {
+            setDpadLatchMode(!dpadLatchMode);
+            return;
+        }
+
         var id = String(event.pointerId);
         if (activePointers[id]) return;
 
         var item = { element: button };
+        var slot = button.getAttribute('data-pgmmv-slot');
+        item.key = keyMap[slot];
+        if (!keyByCode[item.key]) return;
 
-        if (button.hasAttribute('data-pgmmv-slot')) {
-            var slot = button.getAttribute('data-pgmmv-slot');
-            item.key = keyMap[slot];
-            if (!keyByCode[item.key]) return;
-            acquireKey(item.key);
-        } else {
-            item.mouse = Number(button.getAttribute('data-pgmmv-mouse'));
-            if (item.mouse !== 2) return;
-            acquireMouse(item.mouse);
+        // 锁向模式下，点方向键即切换其持续按下状态；功能键仍是普通按住逻辑。
+        if (dpadLatchMode && isDirectionSlot(slot)) {
+            toggleLatchedDirection(slot, item.key, button);
+            return;
         }
 
+        acquireKey(item.key);
         activePointers[id] = item;
         button.classList.add('pgmmv-active');
 
@@ -855,6 +1202,207 @@ body.pgmmv-touch-controls #pgmmv-controls {
     var settingsPanel = document.getElementById('pgmmv-key-settings');
     var settingsToggle = document.getElementById('pgmmv-key-settings-toggle');
     var settingsClose = document.getElementById('pgmmv-key-settings-close');
+
+    // 按键位置独立保存，不影响键位映射和透明度。
+    var POSITION_KEY = 'pgmmv_touch_button_positions_v1';
+    var positionEditToggle = document.getElementById('pgmmv-position-edit-toggle');
+    var positionResetButton = document.getElementById('pgmmv-position-reset');
+    var positionHelp = document.getElementById('pgmmv-position-help');
+    var positionEditMode = false;
+    var positionDrag = null;
+    var positionButtonsSelector =
+        'button[data-pgmmv-slot],button[data-pgmmv-toggle-mouse],button[data-pgmmv-dpad-latch]';
+
+    function getPositionButtons() {
+        return Array.prototype.slice.call(root.querySelectorAll(positionButtonsSelector));
+    }
+
+    function clampNumber(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    function applyButtonPosition(button, savedPosition) {
+        if (!button || !savedPosition) return;
+        var rect = button.getBoundingClientRect();
+        // 先记住原始尺寸，再脱离网格布局，防止 width:100% 变成整屏宽度。
+        var width = rect.width || parseFloat(getComputedStyle(button).width) || 56;
+        var height = rect.height || parseFloat(getComputedStyle(button).height) || 56;
+        var maxX = Math.max(0, window.innerWidth - width);
+        var maxY = Math.max(0, window.innerHeight - height);
+        var x = clampNumber(Number(savedPosition.x) || 0, 0, 1) * maxX;
+        var y = clampNumber(Number(savedPosition.y) || 0, 0, 1) * maxY;
+        button.style.position = 'fixed';
+        button.style.left = x + 'px';
+        button.style.top = y + 'px';
+        button.style.right = 'auto';
+        button.style.bottom = 'auto';
+        button.style.width = width + 'px';
+        button.style.height = height + 'px';
+        button.style.transform = 'none';
+        button.style.zIndex = '6';
+    }
+
+    function clearButtonPosition(button) {
+        button.style.position = '';
+        button.style.left = '';
+        button.style.top = '';
+        button.style.right = '';
+        button.style.bottom = '';
+        button.style.width = '';
+        button.style.height = '';
+        button.style.transform = '';
+        button.style.zIndex = '';
+    }
+
+    function readButtonPosition(button) {
+        var rect = button.getBoundingClientRect();
+        var maxX = Math.max(1, window.innerWidth - rect.width);
+        var maxY = Math.max(1, window.innerHeight - rect.height);
+        return {
+            x: clampNumber(rect.left / maxX, 0, 1),
+            y: clampNumber(rect.top / maxY, 0, 1)
+        };
+    }
+
+    function saveButtonPositions() {
+        var positions = {};
+        getPositionButtons().forEach(function (button) {
+            if (button.style.position === 'fixed' && button.style.left && button.style.top) {
+                var id = button.getAttribute('data-pgmmv-slot') ||
+                    (button.hasAttribute('data-pgmmv-toggle-mouse') ? 'hold' : 'dpadLatch');
+                positions[id] = readButtonPosition(button);
+            }
+        });
+        try {
+            if (Object.keys(positions).length) {
+                localStorage.setItem(POSITION_KEY, JSON.stringify(positions));
+            } else {
+                localStorage.removeItem(POSITION_KEY);
+            }
+        } catch (e) {
+            console.warn('[PGMMV-INPUT] button position save failed:', e);
+        }
+    }
+
+    function loadButtonPositions() {
+        var saved = {};
+        try { saved = JSON.parse(localStorage.getItem(POSITION_KEY) || '{}') || {}; }
+        catch (_) { saved = {}; }
+        getPositionButtons().forEach(function (button) {
+            var id = button.getAttribute('data-pgmmv-slot') ||
+                (button.hasAttribute('data-pgmmv-toggle-mouse') ? 'hold' : 'dpadLatch');
+            if (saved[id] && typeof saved[id] === 'object') {
+                applyButtonPosition(button, saved[id]);
+            }
+        });
+    }
+
+    function setPositionEditMode(enabled) {
+        positionEditMode = !!enabled;
+        root.classList.toggle('pgmmv-position-editing', positionEditMode);
+        if (positionEditToggle) {
+            positionEditToggle.setAttribute('aria-pressed', positionEditMode ? 'true' : 'false');
+            positionEditToggle.textContent = positionEditMode ? '完成位置调整' : '调整按键位置';
+        }
+        if (positionHelp) {
+            positionHelp.textContent = positionEditMode
+                ? '现在可直接拖动屏幕上的方向键、功能键、HOLD 和锁向键。拖动后自动保存；点击“完成位置调整”结束。'
+                : '开启调整后，直接拖动屏幕上的方向键、功能键、HOLD 或锁向键；位置会自动保存。';
+        }
+        if (!positionEditMode && positionDrag) finishPositionDrag();
+        if (positionEditMode) releaseAll();
+    }
+
+    function finishPositionDrag() {
+        if (!positionDrag) return;
+        var button = positionDrag.button;
+        positionDrag = null;
+        if (button) button.classList.remove('pgmmv-position-dragging');
+        saveButtonPositions();
+    }
+
+    // 必须在正常按键 pointerdown 监听器之前拦截，编辑时拖动不能触发游戏按键。
+    root.addEventListener('pointerdown', function (event) {
+        if (!positionEditMode) return;
+        var button = event.target.closest(positionButtonsSelector);
+        if (!button || !root.contains(button)) return;
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+
+        var rect = button.getBoundingClientRect();
+        positionDrag = {
+            button: button,
+            pointerId: event.pointerId,
+            offsetX: event.clientX - rect.left,
+            offsetY: event.clientY - rect.top,
+            width: rect.width,
+            height: rect.height
+        };
+        button.style.position = 'fixed';
+        button.style.left = rect.left + 'px';
+        button.style.top = rect.top + 'px';
+        button.style.right = 'auto';
+        button.style.bottom = 'auto';
+        button.style.width = rect.width + 'px';
+        button.style.height = rect.height + 'px';
+        button.style.transform = 'none';
+        button.style.zIndex = '9';
+        button.classList.add('pgmmv-position-dragging');
+        try { button.setPointerCapture(event.pointerId); } catch (_) {}
+    }, { passive: false, capture: true });
+
+    root.addEventListener('pointermove', function (event) {
+        if (!positionDrag || event.pointerId !== positionDrag.pointerId) return;
+        event.preventDefault();
+        var drag = positionDrag;
+        var left = clampNumber(event.clientX - drag.offsetX, 0,
+            Math.max(0, window.innerWidth - drag.width));
+        var top = clampNumber(event.clientY - drag.offsetY, 0,
+            Math.max(0, window.innerHeight - drag.height));
+        drag.button.style.left = left + 'px';
+        drag.button.style.top = top + 'px';
+    }, { passive: false });
+
+    root.addEventListener('pointerup', function (event) {
+        if (positionDrag && event.pointerId === positionDrag.pointerId) finishPositionDrag();
+    });
+    root.addEventListener('pointercancel', function (event) {
+        if (positionDrag && event.pointerId === positionDrag.pointerId) finishPositionDrag();
+    });
+    root.addEventListener('lostpointercapture', function (event) {
+        if (positionDrag && event.pointerId === positionDrag.pointerId) finishPositionDrag();
+    });
+
+    if (positionEditToggle) {
+        positionEditToggle.addEventListener('click', function () {
+            setPositionEditMode(!positionEditMode);
+        });
+    }
+
+    if (positionResetButton) {
+        positionResetButton.addEventListener('click', function () {
+            getPositionButtons().forEach(clearButtonPosition);
+            try { localStorage.removeItem(POSITION_KEY); } catch (_) {}
+            if (positionHelp) {
+                positionHelp.textContent = '所有按键位置已恢复默认布局；键位映射和透明度未改变。';
+            }
+        });
+    }
+
+    window.addEventListener('resize', function () {
+        // 屏幕尺寸或方向改变后，按归一化坐标重新定位，避免按钮跑出屏幕。
+        var saved = {};
+        try { saved = JSON.parse(localStorage.getItem(POSITION_KEY) || '{}') || {}; }
+        catch (_) { saved = {}; }
+        getPositionButtons().forEach(function (button) {
+            var id = button.getAttribute('data-pgmmv-slot') ||
+                (button.hasAttribute('data-pgmmv-toggle-mouse') ? 'hold' : 'dpadLatch');
+            if (saved[id]) applyButtonPosition(button, saved[id]);
+        });
+    });
+
+    loadButtonPositions();
 
     function renderKeyButtons() {
         root.querySelectorAll('button[data-pgmmv-slot]').forEach(
@@ -898,11 +1446,14 @@ body.pgmmv-touch-controls #pgmmv-controls {
 
     settingsToggle.addEventListener('click', function (event) {
         event.preventDefault();
-        showSettings(settingsPanel.hidden);
+        var opening = settingsPanel.hidden;
+        if (!opening) setPositionEditMode(false);
+        showSettings(opening);
     });
 
     settingsClose.addEventListener('click', function (event) {
         event.preventDefault();
+        setPositionEditMode(false);
         showSettings(false);
     });
 
@@ -914,6 +1465,7 @@ body.pgmmv-touch-controls #pgmmv-controls {
         var code = Number(select.value);
         if (!(slot in keyMap) || !keyByCode[code]) return;
 
+        clearLatchedDirection(slot);
         keyMap[slot] = code;
         saveKeyMap();
         renderKeyButtons();
