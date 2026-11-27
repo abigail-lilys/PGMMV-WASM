@@ -1,26 +1,35 @@
-build/
-*.log
-prebuilt/
-test_game/
-.venv-pgmm-decrypt/
-*.data
-*.wasm
-__pycache__/
-*.pyc
-
 # 构建产物
 build/
-build-strip/
-build-debug/
-prebuilt/
+build-*/
 dist/Resources/
 dist/runtime/
 dist.zip
+*.data
+*.wasm
 
-# 测试/备份/日志
+# 依赖
+node_modules/
+.venv-pgmm-decrypt/
+prebuilt/
+
+# 本地运行数据
 test_game/
 backups/
 symbol_debug_backup/
+
+# 日志与临时
 *.log
 *.unused
+*.bak_*
 build_rc.txt
+undef.txt
+inventory.txt
+
+# Python
+__pycache__/
+*.pyc
+
+# 历史备份（未跟踪）
+CMakeLists.txt.before-*
+dist/*.before-*
+dist/*.bak.*
