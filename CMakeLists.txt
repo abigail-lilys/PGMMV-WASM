@@ -10,6 +10,7 @@ string(REPLACE "-lpthread" "" CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}"
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O1")
 
 project(pgmmv_wasm LANGUAGES C CXX)
+add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-include;new>)
 # [wasm-port] Emscripten -O2 optimization
 if(EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     add_compile_options(-O2)
@@ -175,6 +176,7 @@ if(PGMMV_WITH_CLASSES)
     add_library(pgmmv_classes STATIC ${PGMMV_CLASSES_SRC})
     target_compile_features(pgmmv_classes PUBLIC cxx_std_14)
     target_link_libraries(pgmmv_classes PUBLIC cocos2d)
+    target_link_libraries(pgmmv_classes PRIVATE ext_imgui)
     target_include_directories(pgmmv_classes PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/shim
         ${PLAYER_DIR} ${PLAYER_DIR}/Classes ${PLAYER_DIR}/Classes/External ${PLAYER_DIR}/Classes/Manager
@@ -192,7 +194,7 @@ endif()
 
 # --- round-8b: use the real proj.win32/stdafx.h; make MSVC-only __declspec vanish; show ALL errors ---------
 if(PGMMV_WITH_CLASSES)
-    target_include_directories(pgmmv_classes BEFORE PRIVATE ${PLAYER_DIR}/proj.win32)
+    target_include_directories(pgmmv_classes BEFORE PRIVATE ${CMAKE_CURRENT_LIST_DIR}/shim)
     target_compile_definitions(pgmmv_classes PRIVATE "__declspec(x)=")
     target_compile_options(pgmmv_classes PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include list>" -ferror-limit=0)
 endif()
