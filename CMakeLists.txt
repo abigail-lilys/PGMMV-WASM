@@ -1,11 +1,24 @@
 # PGMMV Player -> WebAssembly. Stage B, first target: libcocos2d.a (engine core only).
 # Uses the engine's own per-module CMakeLists.txt purely as source lists.
 cmake_minimum_required(VERSION 3.13)
+
+# ===== [STRIP_PTHREAD] hard override =====
+string(REPLACE "-pthread"  "" CMAKE_C_FLAGS          "${CMAKE_C_FLAGS}")
+string(REPLACE "-pthread"  "" CMAKE_CXX_FLAGS        "${CMAKE_CXX_FLAGS}")
+string(REPLACE "-lpthread" "" CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
+# ===== /[STRIP_PTHREAD] =====
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O1")
 
 project(pgmmv_wasm LANGUAGES C CXX)
+# [wasm-port] Emscripten -O2 optimization
+if(EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    add_compile_options(-O2)
+    add_link_options(-O2)
+    add_link_options(--profiling-funcs)
+endif()
 
-if(NOT EMSCRIPTEN)
+
+if(FALSE)
     message(FATAL_ERROR "Configure with: emcmake cmake -S ~/pgmmv-wasm -B ~/pgmmv-wasm/build")
 endif()
 
@@ -67,7 +80,7 @@ target_compile_definitions(cocos2d PUBLIC
     CC_USE_TIFF=0 CC_USE_WEBP=0
 )
 
-target_compile_options(cocos2d PUBLIC -pthread ${PGMMV_PORT_FLAGS})
+target_compile_options(cocos2d PUBLIC ${PGMMV_PORT_FLAGS})
 if(PGMMV_QUIET)
     target_compile_options(cocos2d PRIVATE -w)
 endif()
@@ -105,9 +118,7 @@ target_compile_options(cocos2d PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include
 target_compile_definitions(cocos2d PUBLIC GLFW_INCLUDE_NONE)
 if(PGMMV_WITH_GLVIEW)
     # CCGLViewImpl-desktop.h does #include "glfw3.h" (no GLFW/ prefix)
-    find_path(PGMMV_GLFW_INCLUDE glfw3.h
-        HINTS "${EMSCRIPTEN_SYSROOT}/include/GLFW" "${EMSCRIPTEN_ROOT_PATH}/cache/sysroot/include/GLFW"
-        NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+    set(PGMMV_GLFW_INCLUDE "/data/data/com.termux/files/usr/opt/emscripten/cache/sysroot/include/GLFW") #
     message(STATUS "pgmmv: glfw include dir = ${PGMMV_GLFW_INCLUDE}")
     target_include_directories(cocos2d PUBLIC ${PGMMV_GLFW_INCLUDE})
 endif()
@@ -129,11 +140,11 @@ target_sources(cocos2d PRIVATE ${_extra})
 
 # --- round-5: runtime smoke test (no game assets, no scripting) ---------------------------------
 # Consumers of cocos2d need the thread + port + GLFW link options too.
-target_link_options(cocos2d INTERFACE -pthread -sUSE_GLFW=3 ${PGMMV_PORT_FLAGS})
+target_link_options(cocos2d INTERFACE -sUSE_GLFW=3 ${PGMMV_PORT_FLAGS})
 add_executable(hello_app test/hello_app.cpp)
 target_link_libraries(hello_app PRIVATE cocos2d)
 # default stack is only 64 KB; the scene-graph recursion needs more
-target_link_options(hello_app PRIVATE -sSTACK_SIZE=5242880 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=134217728 -sASSERTIONS=1)
+target_link_options(hello_app PRIVATE -sSTACK_SIZE=5242880 -sALLOW_MEMORY_GROWTH=1  -sASSERTIONS=2)
 set_target_properties(hello_app PROPERTIES SUFFIX ".html" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/web")
 
 # --- round-5b: debug aid - log the GL call that raises an error (test/gl_trace.js) ----------------
@@ -146,7 +157,7 @@ target_link_options(hello_app PRIVATE -sFULL_ES2=1 "SHELL:--pre-js ${CMAKE_SOURC
 # --- round-6: A/B test - same program WITHOUT -sFULL_ES2 (FULL_ES2 stays on hello_app only) --------------------
 add_executable(hello_nofull test/hello_app.cpp)
 target_link_libraries(hello_nofull PRIVATE cocos2d)
-target_link_options(hello_nofull PRIVATE -sSTACK_SIZE=5242880 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=134217728 -sASSERTIONS=1
+target_link_options(hello_nofull PRIVATE -sSTACK_SIZE=5242880 -sALLOW_MEMORY_GROWTH=1  -sASSERTIONS=2
                     "SHELL:--pre-js ${CMAKE_SOURCE_DIR}/test/js_errors.js")
 set_target_properties(hello_nofull PROPERTIES SUFFIX ".html" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/web")
 
@@ -222,9 +233,13 @@ if(PGMMV_WITH_CLASSES)
         "${CMAKE_CURRENT_LIST_DIR}/prebuilt/sm34/lib/libjs_static.a"
         "${CMAKE_CURRENT_LIST_DIR}/prebuilt/sm34/lib/libnspr4.a"
         "${CMAKE_CURRENT_LIST_DIR}/prebuilt/sm34/lib/libplc4.a"
-        "${CMAKE_CURRENT_LIST_DIR}/prebuilt/sm34/lib/libplds4.a")
+        "${CMAKE_CURRENT_LIST_DIR}/prebuilt/sm34/lib/libplds4.a"
+        # [STRIP_NSPR] removed: libnspr4.a
+        # [STRIP_NSPR] removed: libplc4.a
+        # [STRIP_NSPR] removed: libplds4.a
+    )
     target_link_options(classes_probe PRIVATE -sFULL_ES2=1 -Wl,--no-gc-sections
-        -sSTACK_SIZE=5242880 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=268435456 -sASSERTIONS=1)
+        -sSTACK_SIZE=5242880 -sALLOW_MEMORY_GROWTH=1  -sASSERTIONS=2)
     set_target_properties(classes_probe PROPERTIES SUFFIX ".html" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/web")
 endif()
 
@@ -313,7 +328,13 @@ endif()
 # --- round-12: stub out the two reentrant protoent lookups NSPR references (musl lacks them) -------------
 # marker: classes_probe_netdb_stubs
 if(PGMMV_WITH_CLASSES)
-    target_sources(classes_probe PRIVATE ${CMAKE_CURRENT_LIST_DIR}/shim/netdb_stubs.c)
+    target_sources(classes_probe PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/shim/netdb_stubs.c
+        ${CMAKE_CURRENT_LIST_DIR}/shim/sm/nspr_single.cpp
+    )
+    target_include_directories(classes_probe PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/prebuilt/sm34/include"
+    )
 endif()
 
 # --- round-12b: stub implementation of DllPluginManager (abstract base; win32 impl is excluded) ---------
@@ -381,13 +402,49 @@ endif()
 # ---- PGMMV Player wasm 入口：复用 classes_probe 的编译/链接配置 ----
 add_executable(pgmmv test/pgmmv_main.cpp)
 
+# PGMMV_SM34_GENERATIONAL_GC_CONFIG_V1
+# Match the SpiderMonkey 34 prebuilt library's generational GC configuration.
+target_compile_definitions(pgmmv PRIVATE
+    JSGC_GENERATIONAL=1
+    JSGC_USE_EXACT_ROOTING=1
+)
+
+foreach(_sm_target pgmmv_classes ext_jsb classes_probe)
+    if(TARGET ${_sm_target})
+        target_compile_definitions(
+            ${_sm_target} PRIVATE
+            JSGC_GENERATIONAL=1
+            JSGC_USE_EXACT_ROOTING=1
+        )
+    endif()
+endforeach()
+
+# The new JSB barrier references are introduced in ext_jsb.
+# Repeat SpiderMonkey and NSPR archives after ext_jsb to preserve
+# static-library dependency resolution order.
+if(TARGET classes_probe)
+    target_link_libraries(classes_probe PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/prebuilt/sm34/lib/libjs_static.a"
+        "${CMAKE_CURRENT_LIST_DIR}/prebuilt/sm34/lib/libnspr4.a"
+        "${CMAKE_CURRENT_LIST_DIR}/prebuilt/sm34/lib/libplc4.a"
+        "${CMAKE_CURRENT_LIST_DIR}/prebuilt/sm34/lib/libplds4.a"
+    )
+endif()
+
+
+# PGMMV_WASM_CLASSES_BUILD_DEPENDENCY_V1
+# Build the core classes archive before entering the pgmmv link sub-make.
+if(TARGET pgmmv_classes)
+    add_dependencies(pgmmv pgmmv_classes)
+endif()
+
 foreach(_prop LINK_LIBRARIES LINK_OPTIONS COMPILE_DEFINITIONS COMPILE_OPTIONS INCLUDE_DIRECTORIES)
     get_target_property(_val classes_probe ${_prop})
     if(_val)
         if(_prop STREQUAL "LINK_LIBRARIES")
             target_link_libraries(pgmmv PRIVATE ${_val})
         elseif(_prop STREQUAL "LINK_OPTIONS")
-            target_link_options(pgmmv PRIVATE ${_val})
+            target_link_options(pgmmv PRIVATE -gsource-map -sASSERTIONS=2 ${_val})
         elseif(_prop STREQUAL "COMPILE_DEFINITIONS")
             target_compile_definitions(pgmmv PRIVATE ${_val})
         elseif(_prop STREQUAL "COMPILE_OPTIONS")
@@ -399,8 +456,8 @@ foreach(_prop LINK_LIBRARIES LINK_OPTIONS COMPILE_DEFINITIONS COMPILE_OPTIONS IN
 endforeach()
 
 set_target_properties(pgmmv PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/web"
-    SUFFIX ".html"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/runtime"
+    SUFFIX ".js"
 )
 
 # --- pgmmv 需要 Player/Classes（AppDelegate.h 等），pgmmv_classes 的 include 是 PRIVATE 不传递 ---
@@ -444,23 +501,35 @@ endif()
 
 
 
-# --- 挂载测试游戏资源到 wasm 虚拟文件系统 ---
-target_link_options(pgmmv PRIVATE "-sASSERTIONS=0")
-# 挂载到 /app/Resources 匹配默认根目录
-if(EXISTS "${CMAKE_SOURCE_DIR}/test_game/Resources/data")
-    target_link_options(pgmmv PRIVATE "--preload-file=${CMAKE_SOURCE_DIR}/test_game/Resources@/app/Resources") # WASM_PRELOAD_V1
-target_link_options(pgmmv PRIVATE -sFORCE_FILESYSTEM=1) # WASM_FORCE_FS_V1
-endif()
-if(EXISTS "${CMAKE_SOURCE_DIR}/test_game/Resources/script")
-    # WASM_PRELOAD_V1: script now covered by the full Resources preload above
-endif()
-
 # --- 调试用的强化配置 ---
-target_link_options(pgmmv PRIVATE -sASSERTIONS=0)
-target_link_options(pgmmv PRIVATE )
-target_link_options(pgmmv PRIVATE -sSTACK_SIZE=8388608)
+target_link_options(pgmmv PRIVATE -gsource-map -sASSERTIONS=2 )
+target_link_options(pgmmv PRIVATE -gsource-map -sASSERTIONS=2 )
+target_link_options(pgmmv PRIVATE -gsource-map -sASSERTIONS=2 -sSTACK_SIZE=8388608)
 
 # --- 保守策略：在 WebAssembly 下强制禁用 Windows 专用的预加载优化 ---
 target_compile_options(pgmmv_classes PRIVATE -UUSE_PRELOAD_TEX)
 # 实验：预创建线程池，避免主线程创建线程后阻塞导致死锁
-target_link_options(pgmmv PRIVATE -sPTHREAD_POOL_SIZE=40 -sPTHREAD_POOL_SIZE_STRICT=2)
+# [STRIP_PTHREAD] removed pool size
+
+
+
+
+
+
+
+# --- RUNTIME_SPLIT_V1 (RESTORED) ---
+target_link_options(pgmmv PRIVATE
+    --emit-symbol-map
+    "SHELL:--pre-js ${CMAKE_SOURCE_DIR}/web/loader.js"
+    "-sEXPORTED_RUNTIME_METHODS=FS,addRunDependency,removeRunDependency,callMain"
+    -sFORCE_FILESYSTEM=1
+    -sASSERTIONS=1
+    -sALLOW_MEMORY_GROWTH=1
+    -sINITIAL_MEMORY=268435456
+    -gsource-map)
+set_property(TARGET pgmmv APPEND PROPERTY LINK_DEPENDS "${CMAKE_SOURCE_DIR}/web/loader.js")
+
+# PGMMV_LAZY_IDBFS_LINK_V1
+if(TARGET pgmmv)
+    target_link_options(pgmmv PRIVATE -lidbfs.js)
+endif()
