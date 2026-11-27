@@ -1,12 +1,13 @@
 import base64
 import json
 import shutil
+import sys
 from pathlib import Path
 
 from pgmm_decrypt import decrypt_pgmm_key, decrypt_pgmm_resource
 
-root = Path.home() / "pgmmv-wasm/test_game"
-src = root / "Resources/data/project.json"
+root = Path(sys.argv[1]).expanduser().resolve() if len(sys.argv) > 1 else Path.home() / "pgmmv-wasm/test_game/Resources"
+src = root / "data/project.json"
 
 if not src.is_file():
     matches = list(root.rglob("project.json"))

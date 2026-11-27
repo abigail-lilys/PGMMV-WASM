@@ -7,3 +7,19 @@ test_game/
 *.wasm
 __pycache__/
 *.pyc
+
+# 构建产物
+build/
+build-strip/
+build-debug/
+prebuilt/
+dist/Resources/
+dist/runtime/
+dist.zip
+
+# 测试/备份/日志
+test_game/
+backups/
+symbol_debug_backup/
+*.log
+*.unused

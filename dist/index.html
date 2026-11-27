@@ -93,6 +93,12 @@ body.pgmmv-touch-controls #pgmmv-controls {
     border-color: #aaffdf;
     transform: scale(.96);
 }
+/* 功能键长按锁定后的保持高亮 */
+#pgmmv-controls button.pgmmv-latched {
+    background: var(--pgmmv-btn-active-bg);
+    border-color: #aaffdf;
+    box-shadow: 0 0 0 3px rgba(170,255,223,.35), 0 3px 12px #0008;
+}
 #pgmmv-controls .pgmmv-pad {
     display: grid;
     grid-template-columns: repeat(3,clamp(48px,13vw,68px));
@@ -139,29 +145,37 @@ body.pgmmv-touch-controls #pgmmv-controls {
 
 /* 锁定类按钮：开启后保持高亮，直到再次点击或页面失焦 */
 #pgmmv-controls button[data-pgmmv-toggle-mouse].pgmmv-active,
-#pgmmv-controls button[data-pgmmv-dpad-latch].pgmmv-active {
+#pgmmv-controls button[data-pgmmv-dpad-latch].pgmmv-active,
+#pgmmv-controls button[data-pgmmv-function-latch].pgmmv-active {
     background: var(--pgmmv-btn-active-bg);
     border-color: #aaffdf;
     box-shadow: 0 0 0 2px rgba(170,255,223,.18), 0 3px 12px #0008;
 }
-#pgmmv-controls .pgmmv-dpad-latch {
+#pgmmv-controls .pgmmv-dpad-latch,
+#pgmmv-controls .pgmmv-function-latch {
     position: fixed;
     top: max(10px,env(safe-area-inset-top,0px));
-    left: 50%;
     width: 76px;
     height: 42px;
     border-radius: 12px;
-    transform: translateX(-50%);
     background: rgba(18,31,45,.62);
     border-color: rgba(220,240,255,.5);
     z-index: 6;
 }
-#pgmmv-controls .pgmmv-dpad-latch.pgmmv-active {
-    transform: translateX(-50%) scale(.96);
+#pgmmv-controls .pgmmv-dpad-latch {
+    left: calc(50% - 82px);
+}
+#pgmmv-controls .pgmmv-function-latch {
+    left: calc(50% + 6px);
+}
+#pgmmv-controls .pgmmv-dpad-latch.pgmmv-active,
+#pgmmv-controls .pgmmv-function-latch.pgmmv-active {
+    transform: scale(.96);
 }
 #pgmmv-controls.pgmmv-position-editing button[data-pgmmv-slot],
 #pgmmv-controls.pgmmv-position-editing button[data-pgmmv-toggle-mouse],
-#pgmmv-controls.pgmmv-position-editing button[data-pgmmv-dpad-latch] {
+#pgmmv-controls.pgmmv-position-editing button[data-pgmmv-dpad-latch],
+#pgmmv-controls.pgmmv-position-editing button[data-pgmmv-function-latch] {
     outline: 2px dashed rgba(255,220,120,.9);
     outline-offset: 2px;
     cursor: move;
@@ -811,12 +825,15 @@ body.pgmmv-touch-controls #pgmmv-controls {
       <label>功能键 3
         <select data-pgmmv-setting="key3"></select>
       </label>
+      <label>HOLD 键功能
+        <select data-pgmmv-setting="hold"></select>
+      </label>
     </div>
 
     <div class="pgmmv-position-tools">
       <button id="pgmmv-position-edit-toggle" type="button" aria-pressed="false">调整按键位置</button>
       <button id="pgmmv-position-reset" type="button">一键复原位置</button>
-      <p id="pgmmv-position-help">开启调整后，直接拖动屏幕上的方向键、功能键、HOLD 或锁向键；位置会自动保存。点击“完成位置调整”结束。</p>
+      <p id="pgmmv-position-help">开启调整后，直接拖动屏幕上的方向键、功能键、HOLD、锁向或锁键按钮；位置会自动保存。点击“完成位置调整”结束。</p>
     </div>
 
     <!-- 新增：按键透明度滑杆 -->
@@ -828,12 +845,14 @@ body.pgmmv-touch-controls #pgmmv-controls {
     </div>
 
     <div class="pgmmv-settings-note">
-      HOLD 点击切换鼠标右键；“锁向”位于屏幕上方，开启后点击方向键可锁定方向。可在此处调整所有按键的位置，支持一键复原。
+      HOLD 默认点击切换鼠标右键，也可在“HOLD 键功能”中改为其他键盘按键。顶部“锁向”只锁方向键，“锁键”只锁功能键（Z/X/SHIFT 等）；开启后点对应按键切换持续按下，再点同一键解除，两个锁定互不影响。可在此处调整所有按键的位置，支持一键复原。
     </div>
   </section>
 
   <button type="button" class="pgmmv-dpad-latch"
           data-pgmmv-dpad-latch aria-pressed="false">锁向</button>
+  <button type="button" class="pgmmv-function-latch"
+          data-pgmmv-function-latch aria-pressed="false">锁键</button>
 
   <div class="pgmmv-pad" aria-label="方向键">
     <button type="button" class="pgmmv-up"
@@ -896,6 +915,15 @@ body.pgmmv-touch-controls #pgmmv-controls {
     }
 
     var keyMap = { up: 38, down: 40, left: 37, right: 39, key1: 90, key2: 88, key3: 16 };
+
+    var HOLD_STORAGE_KEY = 'pgmmv_touch_hold_mapping_v1';
+    var holdMapping = 'mouse:2';
+    try {
+        var savedHold = localStorage.getItem(HOLD_STORAGE_KEY);
+        if (savedHold && (savedHold === 'mouse:2' || keyByCode[Number(savedHold)])) {
+            holdMapping = savedHold;
+        }
+    } catch (_) {}
 
     /* ---------- 按键透明度（修改为允许 0%） ---------- */
     var OPACITY_KEY = 'pgmmv_touch_opacity_v1';
@@ -968,29 +996,85 @@ body.pgmmv-touch-controls #pgmmv-controls {
     var keyRefs = Object.create(null);
     var mouseRefs = Object.create(null);
 
-    // HOLD：点击一次按下鼠标右键，再点击一次释放。
+    // HOLD：点击一次切换按下状态，再点击一次释放。默认为鼠标右键，可映射到键盘键。
     var holdMouseLatched = false;
+    var holdKeyLatched = null;
     var holdButton = root.querySelector('button[data-pgmmv-toggle-mouse]');
+
+    function getHoldKeyCode() {
+        if (holdMapping === 'mouse:2') return null;
+        var n = Number(holdMapping);
+        return keyByCode[n] ? n : null;
+    }
+
+    function renderHoldButton() {
+        if (!holdButton) return;
+        var code = getHoldKeyCode();
+        if (code === null) {
+            holdButton.textContent = 'HOLD';
+        } else {
+            holdButton.textContent = keyByCode[code].label;
+        }
+    }
+
+    function toggleHoldKey(code) {
+        if (holdKeyLatched === code) {
+            releaseKey(code);
+            holdKeyLatched = null;
+            holdButton.classList.remove('pgmmv-active');
+            return;
+        }
+        if (holdKeyLatched !== null) {
+            releaseKey(holdKeyLatched);
+        }
+        acquireKey(code);
+        holdKeyLatched = code;
+        holdButton.classList.add('pgmmv-active');
+    }
+
+    function clearHoldMapping() {
+        if (holdMouseLatched) {
+            releaseMouse(2);
+            holdMouseLatched = false;
+        }
+        if (holdKeyLatched !== null) {
+            releaseKey(holdKeyLatched);
+            holdKeyLatched = null;
+        }
+        if (holdButton) holdButton.classList.remove('pgmmv-active');
+    }
 
     // 锁向模式：每个方向都可独立切换，并允许同时锁定多个方向（例如斜向）。
     var dpadLatchMode = false;
     var latchedDirections = Object.create(null);
     var dpadLatchButton = root.querySelector('button[data-pgmmv-dpad-latch]');
+    var functionLatchButton = root.querySelector('button[data-pgmmv-function-latch]');
+    var functionLatchMode = false;
 
     function isDirectionSlot(slot) {
         return slot === 'up' || slot === 'down' ||
             slot === 'left' || slot === 'right';
     }
 
+    function isFunctionSlot(slot) {
+        return !isDirectionSlot(slot) && (slot in keyMap);
+    }
+
     function renderToggleButtons() {
         if (holdButton) {
-            holdButton.classList.toggle('pgmmv-active', holdMouseLatched);
-            holdButton.setAttribute('aria-pressed', holdMouseLatched ? 'true' : 'false');
+            var holdActive = holdMouseLatched || holdKeyLatched !== null;
+            holdButton.classList.toggle('pgmmv-active', holdActive);
+            holdButton.setAttribute('aria-pressed', holdActive ? 'true' : 'false');
         }
         if (dpadLatchButton) {
             dpadLatchButton.classList.toggle('pgmmv-active', dpadLatchMode);
             dpadLatchButton.setAttribute('aria-pressed', dpadLatchMode ? 'true' : 'false');
             dpadLatchButton.textContent = dpadLatchMode ? '锁向✓' : '锁向';
+        }
+        if (functionLatchButton) {
+            functionLatchButton.classList.toggle('pgmmv-active', functionLatchMode);
+            functionLatchButton.setAttribute('aria-pressed', functionLatchMode ? 'true' : 'false');
+            functionLatchButton.textContent = functionLatchMode ? '锁键✓' : '锁键';
         }
     }
 
@@ -1006,9 +1090,21 @@ body.pgmmv-touch-controls #pgmmv-controls {
         Object.keys(latchedDirections).forEach(clearLatchedDirection);
     }
 
+    function clearLatchedByFilter(predicate) {
+        Object.keys(latchedDirections).forEach(function (slot) {
+            if (predicate(slot)) clearLatchedDirection(slot);
+        });
+    }
+
     function setDpadLatchMode(enabled) {
         dpadLatchMode = !!enabled;
-        if (!dpadLatchMode) clearAllLatchedDirections();
+        if (!dpadLatchMode) clearLatchedByFilter(isDirectionSlot);
+        renderToggleButtons();
+    }
+
+    function setFunctionLatchMode(enabled) {
+        functionLatchMode = !!enabled;
+        if (!functionLatchMode) clearLatchedByFilter(isFunctionSlot);
         renderToggleButtons();
     }
 
@@ -1020,6 +1116,41 @@ body.pgmmv-touch-controls #pgmmv-controls {
         latchedDirections[slot] = { code: code, button: button };
         acquireKey(code);
         button.classList.add('pgmmv-active');
+    }
+
+    // 锁键模式下功能键的“自动连发”：点一次开启，按间隔反复 down/up，再点一次停止。
+    // 单次按下的保持时长和两次触发的间隔都可调；间隔要大于游戏的跳跃动作时长，
+    // 否则游戏会忽略落在动作时长内的重复 keydown。
+    var TAP_HOLD_MS = 60;      // 单次 down 保持多久后 up
+    var AUTO_FIRE_MS = 220;    // 相邻两次触发的间隔（含 TAP_HOLD_MS 在内）
+    var autoFireTimers = Object.create(null);
+    var autoFireButtons = Object.create(null);
+
+    function tapOnce(code) {
+        dispatchKey(code, true);
+        setTimeout(function () { dispatchKey(code, false); }, TAP_HOLD_MS);
+    }
+
+    function startAutoFire(code, button) {
+        if (autoFireTimers[code]) return;
+        autoFireButtons[code] = button || null;
+        if (button) button.classList.add('pgmmv-active');
+        tapOnce(code);
+        autoFireTimers[code] = setInterval(function () { tapOnce(code); }, AUTO_FIRE_MS);
+    }
+
+    function stopAutoFire(code) {
+        if (!autoFireTimers[code]) return;
+        clearInterval(autoFireTimers[code]);
+        delete autoFireTimers[code];
+        dispatchKey(code, false);
+        var btn = autoFireButtons[code];
+        if (btn) btn.classList.remove('pgmmv-active');
+        delete autoFireButtons[code];
+    }
+
+    function stopAllAutoFire() {
+        Object.keys(autoFireTimers).forEach(function (c) { stopAutoFire(Number(c)); });
     }
 
     function toggleHoldMouse() {
@@ -1138,13 +1269,19 @@ body.pgmmv-touch-controls #pgmmv-controls {
             releaseMouse(2);
             holdMouseLatched = false;
         }
+        if (holdKeyLatched !== null) {
+            releaseKey(holdKeyLatched);
+            holdKeyLatched = null;
+        }
+        stopAllAutoFire();
         dpadLatchMode = false;
+        functionLatchMode = false;
         renderToggleButtons();
     }
 
     root.addEventListener('pointerdown', function (event) {
         var button = event.target.closest(
-            'button[data-pgmmv-slot],button[data-pgmmv-toggle-mouse],button[data-pgmmv-dpad-latch]'
+            'button[data-pgmmv-slot],button[data-pgmmv-toggle-mouse],button[data-pgmmv-dpad-latch],button[data-pgmmv-function-latch]'
         );
 
         if (!button || !root.contains(button)) return;
@@ -1154,11 +1291,21 @@ body.pgmmv-touch-controls #pgmmv-controls {
 
         // 两个模式键是“点击切换”，不随 pointerup 自动释放。
         if (button.hasAttribute('data-pgmmv-toggle-mouse')) {
-            toggleHoldMouse();
+            var holdKeyCode = getHoldKeyCode();
+            if (holdKeyCode === null) {
+                toggleHoldMouse();
+            } else {
+                toggleHoldKey(holdKeyCode);
+            }
+            renderToggleButtons();
             return;
         }
         if (button.hasAttribute('data-pgmmv-dpad-latch')) {
             setDpadLatchMode(!dpadLatchMode);
+            return;
+        }
+        if (button.hasAttribute('data-pgmmv-function-latch')) {
+            setFunctionLatchMode(!functionLatchMode);
             return;
         }
 
@@ -1170,9 +1317,14 @@ body.pgmmv-touch-controls #pgmmv-controls {
         item.key = keyMap[slot];
         if (!keyByCode[item.key]) return;
 
-        // 锁向模式下，点方向键即切换其持续按下状态；功能键仍是普通按住逻辑。
+        // 锁向：方向键切换持续按住；锁键：功能键切换自动连发。
         if (dpadLatchMode && isDirectionSlot(slot)) {
             toggleLatchedDirection(slot, item.key, button);
+            return;
+        }
+        if (functionLatchMode && isFunctionSlot(slot)) {
+            if (autoFireTimers[item.key]) stopAutoFire(item.key);
+            else startAutoFire(item.key, button);
             return;
         }
 
@@ -1211,10 +1363,17 @@ body.pgmmv-touch-controls #pgmmv-controls {
     var positionEditMode = false;
     var positionDrag = null;
     var positionButtonsSelector =
-        'button[data-pgmmv-slot],button[data-pgmmv-toggle-mouse],button[data-pgmmv-dpad-latch]';
+        'button[data-pgmmv-slot],button[data-pgmmv-toggle-mouse],button[data-pgmmv-dpad-latch],button[data-pgmmv-function-latch]';
 
     function getPositionButtons() {
         return Array.prototype.slice.call(root.querySelectorAll(positionButtonsSelector));
+    }
+
+    function getPositionButtonId(button) {
+        if (button.hasAttribute('data-pgmmv-toggle-mouse')) return 'hold';
+        if (button.hasAttribute('data-pgmmv-dpad-latch')) return 'dpadLatch';
+        if (button.hasAttribute('data-pgmmv-function-latch')) return 'functionLatch';
+        return button.getAttribute('data-pgmmv-slot');
     }
 
     function clampNumber(value, min, max) {
@@ -1268,8 +1427,7 @@ body.pgmmv-touch-controls #pgmmv-controls {
         var positions = {};
         getPositionButtons().forEach(function (button) {
             if (button.style.position === 'fixed' && button.style.left && button.style.top) {
-                var id = button.getAttribute('data-pgmmv-slot') ||
-                    (button.hasAttribute('data-pgmmv-toggle-mouse') ? 'hold' : 'dpadLatch');
+                var id = getPositionButtonId(button);
                 positions[id] = readButtonPosition(button);
             }
         });
@@ -1289,8 +1447,7 @@ body.pgmmv-touch-controls #pgmmv-controls {
         try { saved = JSON.parse(localStorage.getItem(POSITION_KEY) || '{}') || {}; }
         catch (_) { saved = {}; }
         getPositionButtons().forEach(function (button) {
-            var id = button.getAttribute('data-pgmmv-slot') ||
-                (button.hasAttribute('data-pgmmv-toggle-mouse') ? 'hold' : 'dpadLatch');
+            var id = getPositionButtonId(button);
             if (saved[id] && typeof saved[id] === 'object') {
                 applyButtonPosition(button, saved[id]);
             }
@@ -1306,8 +1463,8 @@ body.pgmmv-touch-controls #pgmmv-controls {
         }
         if (positionHelp) {
             positionHelp.textContent = positionEditMode
-                ? '现在可直接拖动屏幕上的方向键、功能键、HOLD 和锁向键。拖动后自动保存；点击“完成位置调整”结束。'
-                : '开启调整后，直接拖动屏幕上的方向键、功能键、HOLD 或锁向键；位置会自动保存。';
+                ? '现在可直接拖动屏幕上的方向键、功能键、HOLD、锁向和锁键按钮。拖动后自动保存；点击“完成位置调整”结束。'
+                : '开启调整后，直接拖动屏幕上的方向键、功能键、HOLD、锁向或锁键按钮；位置会自动保存。';
         }
         if (!positionEditMode && positionDrag) finishPositionDrag();
         if (positionEditMode) releaseAll();
@@ -1396,8 +1553,7 @@ body.pgmmv-touch-controls #pgmmv-controls {
         try { saved = JSON.parse(localStorage.getItem(POSITION_KEY) || '{}') || {}; }
         catch (_) { saved = {}; }
         getPositionButtons().forEach(function (button) {
-            var id = button.getAttribute('data-pgmmv-slot') ||
-                (button.hasAttribute('data-pgmmv-toggle-mouse') ? 'hold' : 'dpadLatch');
+            var id = getPositionButtonId(button);
             if (saved[id]) applyButtonPosition(button, saved[id]);
         });
     });
@@ -1418,6 +1574,21 @@ body.pgmmv-touch-controls #pgmmv-controls {
         root.querySelectorAll('select[data-pgmmv-setting]').forEach(
             function (select) {
                 var slot = select.getAttribute('data-pgmmv-setting');
+
+                if (slot === 'hold') {
+                    var mouseOpt = document.createElement('option');
+                    mouseOpt.value = 'mouse:2';
+                    mouseOpt.textContent = '鼠标右键';
+                    select.appendChild(mouseOpt);
+                    keyOptions.forEach(function (item) {
+                        var option = document.createElement('option');
+                        option.value = String(item.code);
+                        option.textContent = item.label;
+                        select.appendChild(option);
+                    });
+                    select.value = holdMapping;
+                    return;
+                }
 
                 keyOptions.forEach(function (item) {
                     var option = document.createElement('option');
@@ -1462,6 +1633,19 @@ body.pgmmv-touch-controls #pgmmv-controls {
         if (!select) return;
 
         var slot = select.getAttribute('data-pgmmv-setting');
+
+        if (slot === 'hold') {
+            var holdValue = select.value;
+            if (holdValue !== 'mouse:2' && !keyByCode[Number(holdValue)]) return;
+            clearHoldMapping();
+            holdMapping = holdValue;
+            try { localStorage.setItem(HOLD_STORAGE_KEY, holdMapping); } catch (_) {}
+            renderHoldButton();
+            renderToggleButtons();
+            console.log('[PGMMV-INPUT] hold mapped -> ' + holdMapping);
+            return;
+        }
+
         var code = Number(select.value);
         if (!(slot in keyMap) || !keyByCode[code]) return;
 
@@ -1496,6 +1680,7 @@ body.pgmmv-touch-controls #pgmmv-controls {
 
     populateSettings();
     renderKeyButtons();
+    renderHoldButton();
 
     var hasTouch =
         (navigator.maxTouchPoints || 0) > 0 ||

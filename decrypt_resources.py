@@ -2,8 +2,9 @@ import base64, json, os, shutil, sys
 from pathlib import Path
 from pgmm_decrypt import decrypt_pgmm_key, decrypt_pgmm_resource
 
+_args = [a for a in sys.argv[1:] if a != '--apply']
 do_apply = '--apply' in sys.argv
-root = Path.home() / "pgmmv-wasm/test_game/Resources"
+root = Path(_args[0]).expanduser().resolve() if _args else Path.home() / "pgmmv-wasm/test_game/Resources"
 info = root / "data/info.json"
 if not info.is_file():
     raise SystemExit(f"info.json not found: {info}")
@@ -14,7 +15,7 @@ key = decrypt_pgmm_key(base64.b64decode(meta["key"]))
 print(f"key: {len(key)} bytes")
 
 # 只处理这些目录；data 目录里有 project.json 的 .bak 备份，跳过
-dirs = ["img", "audio", "fonts", "script", "plugins"]
+dirs = ["."]  # 递归整个 Resources（含 data/）
 total = enc = ok = fail = 0
 for d in dirs:
     p = root / d
@@ -22,6 +23,8 @@ for d in dirs:
         continue
     for f in sorted(p.rglob("*")):
         if not f.is_file():
+            continue
+        if ".before-decrypt" in f.name or f.name.endswith(".tmp"):
             continue
         total += 1
         with open(f, "rb") as fh:
